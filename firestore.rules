@@ -2,30 +2,77 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Players ──────────────────────────────────────────────────────────────
     match /players/{playerId} {
       allow read: if true;
       allow create, delete: if true;
       allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pin', 'pushSubscription']);
     }
 
+    // ── Rounds + subcollections ───────────────────────────────────────────────
     match /rounds/{roundId} {
       allow read: if true;
       allow write: if true;
 
-      // Covers direct reads on a single vote document
       match /votes/{voteId} {
         allow read: if true;
         allow create: if true;
         allow update, delete: if false;
       }
+
+      match /fanVotes/{voteId} {
+        allow read: if true;
+        allow create: if true;
+        allow update: if false;
+        allow delete: if true;   // fans can cancel their own vote
+      }
+
+      match /messages/{messageId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if false;
+      }
+
+      match /goals/{goalId} {
+        allow read: if true;
+        allow create: if true;
+        allow delete: if true;   // UI restricts delete to the submitting fan
+        allow update: if false;
+      }
+
+      match /chat/{chatId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if true;   // UI restricts to the sending fan
+      }
     }
 
-    // Required for collectionGroup(db, 'votes') queries —
-    // the nested rule above doesn't cover cross-collection reads.
+    // collectionGroup queries
     match /{path=**}/votes/{voteId} {
       allow read: if true;
       allow create: if true;
       allow update, delete: if false;
+    }
+
+    match /{path=**}/fanVotes/{voteId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if false;
+      allow delete: if true;   // fans can cancel their own vote
+    }
+
+    match /{path=**}/messages/{messageId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if false;
+    }
+
+    // ── Fans ─────────────────────────────────────────────────────────────────
+    match /fans/{fanId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pin']);
+      allow delete: if false;
     }
   }
 }

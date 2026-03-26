@@ -83,6 +83,40 @@ exports.sendVoteReminders = onSchedule(
   }
 )
 
+// ── Auto live-round flag — runs every hour on Fri/Sat/Sun ─────────────────
+// Marks rounds as isLive=true when current time is within 2hrs before/after
+// seniors kick-off. Reserves kick-off is implicitly 2hrs before seniors.
+exports.updateLiveRounds = onSchedule(
+  {
+    schedule: '0 * * * 5,6,0', // every hour, Friday–Sunday
+    timeZone: 'Australia/Melbourne',
+    region: 'australia-southeast1',
+  },
+  async () => {
+    const db = admin.firestore()
+    const now = new Date()
+    const roundsSnap = await db.collection('rounds').get()
+    const batch = db.batch()
+
+    for (const roundDoc of roundsSnap.docs) {
+      const round = roundDoc.data()
+      if (!round.kickOffTime || !round.date) continue
+
+      const seniorsKickOff = new Date(`${round.date}T${round.kickOffTime}:00`)
+      const windowStart    = new Date(seniorsKickOff.getTime() - 2 * 60 * 60 * 1000) // 2hrs before
+      const windowEnd      = new Date(seniorsKickOff.getTime() + 2 * 60 * 60 * 1000) // 2hrs after
+      const shouldBeLive   = now >= windowStart && now <= windowEnd
+
+      if (round.isLive !== shouldBeLive) {
+        batch.update(roundDoc.ref, { isLive: shouldBeLive })
+        console.log(`Round ${round.roundNumber} isLive → ${shouldBeLive}`)
+      }
+    }
+
+    await batch.commit()
+  }
+)
+
 // Manual notification trigger — called from admin teamsheet tab
 exports.sendTeamNotification = onCall(
   { secrets: [VAPID_PRIVATE_KEY], region: 'australia-southeast1' },
