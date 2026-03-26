@@ -65,3 +65,37 @@ export interface PendingVote {
   round: Round
   team: Team
 }
+
+// ── Fan (spectator) types ──────────────────────────────────────────────────
+
+export interface Fan {
+  id: string
+  name: string
+  pin: string
+  createdAt: number
+}
+
+export interface FanAuthState {
+  fanId: string
+  fanName: string
+}
+
+export interface FanVote {
+  id: string          // {team}_{fanId}
+  fanId: string
+  roundId: string
+  team: Team
+  playerId: string    // single vote — fan picks their favourite player
+  timestamp: number
+}
+
+export interface FanMessage {
+  id: string
+  fanId: string
+  fanName: string
+  playerId: string    // player being messaged
+  team: Team
+  roundId: string
+  message: string
+  timestamp: number
+}

@@ -1,0 +1,13 @@
+{
+  "projects": {
+    "default": "keysborough-district"
+  },
+  "targets": {
+    "keysborough-district": {
+      "hosting": {
+        "motm": ["keysborough-district-motm"],
+        "fans": ["keysborough-district-fans"]
+      }
+    }
+  }
+}
