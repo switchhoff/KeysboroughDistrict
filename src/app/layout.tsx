@@ -12,6 +12,7 @@ export const metadata: Metadata = {
     title: 'KDFC MOTM',
   },
   icons: {
+    icon: '/logo.png',
     apple: '/logo.png',
   },
 }

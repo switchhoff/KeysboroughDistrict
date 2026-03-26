@@ -10,7 +10,7 @@ import { voteUnlockTime } from '@/lib/voteUnlock'
 import { useRouter } from 'next/navigation'
 import Header from '@/components/Header'
 import Toast from '@/components/Toast'
-import { ChevronDown, Loader2, Plus, Calendar, Users, Trophy, AlertTriangle, UserPlus, Trash2, Target, Pencil, Check, X } from 'lucide-react'
+import { ChevronDown, Loader2, Plus, Calendar, Users, Trophy, AlertTriangle, UserPlus, Trash2, Target, Pencil, Check, X, Zap } from 'lucide-react'
 
 type Tab = 'leaderboard' | 'shame' | 'teamsheet' | 'players' | 'setup' | 'stats'
 
@@ -74,6 +74,7 @@ export default function AdminPage() {
   const [selectedRound, setSelectedRound] = useState<Round | null>(null)
   const [reservesSelected, setReservesSelected] = useState<string[]>([])
   const [seniorsSelected, setSeniorsSelected] = useState<string[]>([])
+  const [playerNumbers, setPlayerNumbers] = useState<Record<Team, Record<string, string>>>({ seniors: {}, reserves: {} })
   const [savingTeamsheet, setSavingTeamsheet] = useState(false)
   const [teamsheetSaved, setTeamsheetSaved] = useState(false)
   const [notifyingTeam, setNotifyingTeam] = useState<Team | null>(null)
@@ -160,6 +161,17 @@ export default function AdminPage() {
     setEditVenue(round.venue)
   }
 
+  const handleToggleLive = async (round: Round) => {
+    try {
+      const next = !round.isLive
+      await updateDoc(doc(db, 'rounds', round.id), { isLive: next })
+      setRounds(prev => prev.map(r => r.id === round.id ? { ...r, isLive: next } : r))
+      setToast({ message: `Round ${round.roundNumber} marked as ${next ? 'Live ⚡' : 'not live'}.`, type: 'success' })
+    } catch {
+      setToast({ message: 'Failed to update live status.', type: 'error' })
+    }
+  }
+
   const handleSaveRoundEdit = async () => {
     if (!editingRoundId || !editOpponent.trim() || !editDate) return
     setSavingEdit(true)
@@ -185,6 +197,10 @@ export default function AdminPage() {
     setSelectedRound(round)
     setReservesSelected(round.teamsheets.reserves)
     setSeniorsSelected(round.teamsheets.seniors)
+    setPlayerNumbers({
+      seniors:  round.numbers?.seniors  ?? {},
+      reserves: round.numbers?.reserves ?? {},
+    })
     setTeamsheetSaved(false)
     setNotifyResult({})
   }
@@ -207,7 +223,9 @@ export default function AdminPage() {
     try {
       await updateDoc(doc(db, 'rounds', selectedRound.id), {
         'teamsheets.reserves': reservesSelected,
-        'teamsheets.seniors': seniorsSelected,
+        'teamsheets.seniors':  seniorsSelected,
+        'numbers.reserves':    playerNumbers.reserves,
+        'numbers.seniors':     playerNumbers.seniors,
       })
       setToast({ message: 'Teamsheet saved!', type: 'success' })
       setTeamsheetSaved(true)
@@ -688,23 +706,51 @@ export default function AdminPage() {
                                 {filter === 'added' ? 'No players added yet.' : 'All players have been added.'}
                               </p>
                             ) : (
-                              visiblePlayers.map(player => (
-                                <button
-                                  key={player.id}
-                                  type="button"
-                                  onClick={() => togglePlayer(player.id, team)}
-                                  className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border text-sm font-medium transition-colors ${
-                                    selected.includes(player.id)
-                                      ? 'bg-club-red/10 border-club-red/30 text-club-red'
-                                      : 'bg-white border-gray-100 text-gray-700'
-                                  }`}
-                                >
-                                  <span>{player.name}</span>
-                                  {selected.includes(player.id) && (
-                                    <span className="text-xs bg-club-red text-white px-2 py-0.5 rounded-full">✓</span>
-                                  )}
-                                </button>
-                              ))
+                              visiblePlayers.map(player => {
+                                const isSelected = selected.includes(player.id)
+                                const num = playerNumbers[team]?.[player.id] ?? ''
+                                return (
+                                  <div
+                                    key={player.id}
+                                    className={`flex items-center rounded-xl border text-sm font-medium transition-colors overflow-hidden ${
+                                      isSelected
+                                        ? 'bg-club-red/10 border-club-red/30'
+                                        : 'bg-white border-gray-100'
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => togglePlayer(player.id, team)}
+                                      className="flex-1 flex items-center justify-between px-4 py-3 text-left"
+                                    >
+                                      <span className={isSelected ? 'text-club-red font-semibold' : 'text-gray-700'}>{player.name}</span>
+                                      {isSelected && (
+                                        <span className="text-xs bg-club-red text-white px-2 py-0.5 rounded-full">✓</span>
+                                      )}
+                                    </button>
+                                    {isSelected && (
+                                      <div className="flex items-center border-l border-club-red/20 pr-3">
+                                        <span className="pl-2 text-xs text-club-red/50 font-bold select-none">#</span>
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          placeholder="—"
+                                          value={num}
+                                          onClick={e => e.stopPropagation()}
+                                          onChange={e => {
+                                            const val = e.target.value.replace(/\D/g, '').slice(0, 2)
+                                            setPlayerNumbers(prev => ({
+                                              ...prev,
+                                              [team]: { ...prev[team], [player.id]: val },
+                                            }))
+                                          }}
+                                          className="w-10 bg-transparent text-sm font-bold text-club-red placeholder-club-red/30 focus:outline-none text-center py-3"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })
                             )}
                           </div>
                         </div>
@@ -1137,13 +1183,18 @@ export default function AdminPage() {
                       return (
                         <div key={round.id} className="bg-white rounded-xl border border-gray-100 px-4 py-3 flex items-center justify-between">
                           <div>
-                            <div className="font-semibold text-gray-900 flex items-center gap-2">
+                            <div className="font-semibold text-gray-900 flex items-center gap-2 flex-wrap">
                               Rd {round.roundNumber} · vs {round.opponent}
                               {round.venue && (
                                 <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
                                   round.venue === 'home' ? 'bg-club-red/10 text-club-red' : 'bg-gray-100 text-gray-500'
                                 }`}>
                                   {round.venue === 'home' ? 'Home' : 'Away'}
+                                </span>
+                              )}
+                              {round.isLive && (
+                                <span className="text-xs font-bold text-club-red bg-club-red/10 px-2 py-0.5 rounded-full uppercase tracking-wide flex items-center gap-0.5 animate-pulse">
+                                  <Zap className="w-3 h-3" /> Live
                                 </span>
                               )}
                             </div>
@@ -1168,6 +1219,13 @@ export default function AdminPage() {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0 ml-3">
+                            <button
+                              onClick={() => handleToggleLive(round)}
+                              title={round.isLive ? 'Mark as not live' : 'Mark as live'}
+                              className={`p-2 transition-colors ${round.isLive ? 'text-club-red' : 'text-gray-300 hover:text-club-red'}`}
+                            >
+                              <Zap className="w-4 h-4" />
+                            </button>
                             <button
                               onClick={() => startEditRound(round)}
                               className="p-2 text-gray-300 hover:text-club-red transition-colors"

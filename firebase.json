@@ -25,9 +25,9 @@
     },
     {
       "target": "fans",
-      "public": "out",
+      "public": "out-fans",
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [{ "source": "**", "destination": "/fans/index.html" }],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }],
       "headers": [
         {
           "source": "**/*.@(js|css)",

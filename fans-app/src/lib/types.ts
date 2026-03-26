@@ -22,7 +22,7 @@ export interface Round {
   id: string
   roundNumber: number
   date: string // ISO date string YYYY-MM-DD
-  kickOffTime: string // HH:MM — used to compute vote unlock (kickOff + 90min)
+  kickOffTime: string // HH:MM seniors kick-off — reserves is kickOffTime - 2hrs
   isLive?: boolean   // managed by Cloud Function hourly; can also be toggled manually
   opponent: string
   venue: 'home' | 'away'
