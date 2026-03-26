@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /players/{playerId} {
+      allow read: if true;
+      allow create, delete: if true;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pin', 'pushSubscription']);
+    }
+
+    match /rounds/{roundId} {
+      allow read: if true;
+      allow write: if true;
+
+      // Covers direct reads on a single vote document
+      match /votes/{voteId} {
+        allow read: if true;
+        allow create: if true;
+        allow update, delete: if false;
+      }
+    }
+
+    // Required for collectionGroup(db, 'votes') queries —
+    // the nested rule above doesn't cover cross-collection reads.
+    match /{path=**}/votes/{voteId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if false;
+    }
+  }
+}

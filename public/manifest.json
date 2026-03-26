@@ -1,0 +1,23 @@
+{
+  "name": "KDFC Man of the Match",
+  "short_name": "KDFC MOTM",
+  "description": "3-2-1 Man of the Match voting for Keysborough District FC",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f9fafb",
+  "theme_color": "#c01e1e",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
