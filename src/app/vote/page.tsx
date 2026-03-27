@@ -8,7 +8,7 @@ import { Round, Player, Vote, Team } from '@/lib/types'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Header from '@/components/Header'
 import Toast from '@/components/Toast'
-import { ChevronDown, Loader2, Trophy, Star, Medal, CheckCircle } from 'lucide-react'
+import { ChevronDown, ChevronLeft, Loader2, Trophy, Star, Medal, CheckCircle } from 'lucide-react'
 
 const POINTS = [
   { label: '3 Points', key: 'points3' as const, color: 'text-gold', bg: 'bg-amber-50 border-amber-200', icon: Trophy, description: 'Best player' },
@@ -129,7 +129,7 @@ function VotePageInner() {
   return (
     <div className="min-h-screen flex flex-col">
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      <Header title={round ? `Round ${round.roundNumber}` : 'Vote'} showBack />
+      <Header title={round ? `Round ${round.roundNumber}` : 'Vote'} />
 
       <main className="flex-1 px-4 py-4 max-w-lg mx-auto w-full">
         {loading ? (
@@ -139,11 +139,18 @@ function VotePageInner() {
         ) : existingVote ? (
           /* ── Read-only: show submitted vote ── */
           <div className="space-y-4">
-            <div>
-              <h2 className="text-xl font-black text-gray-900">Your Vote</h2>
-              <p className="text-gray-500 text-sm mt-0.5">
-                {TEAM_LABEL[team]} · vs {round?.opponent}{round?.venue ? ` · ${round.venue === 'home' ? 'Home' : 'Away'}` : ''}
-              </p>
+            <div className="flex items-center gap-3">
+              <button onClick={() => router.back()}
+                className="w-8 h-8 rounded-full bg-club-red/10 hover:bg-club-red/20 flex items-center justify-center shrink-0 transition-colors"
+              >
+                <ChevronLeft className="w-4 h-4 text-club-red" />
+              </button>
+              <div>
+                <h2 className="text-xl font-black text-gray-900">Your Vote</h2>
+                <p className="text-gray-500 text-sm mt-0.5">
+                  {TEAM_LABEL[team]} · vs {round?.opponent}{round?.venue ? ` · ${round.venue === 'home' ? 'Home' : 'Away'}` : ''}
+                </p>
+              </div>
             </div>
 
             <div className="flex items-center gap-2 bg-club-green/10 border border-club-green/20 rounded-2xl px-4 py-3">

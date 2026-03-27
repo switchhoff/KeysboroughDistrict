@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { collection, getDocs, doc, getDoc, addDoc, orderBy, query } from 'firebase/firestore'
+import { collection, getDocs, doc, getDoc, addDoc, updateDoc, orderBy, query } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { Fan, FanAuthState } from '@/lib/types'
 import { storeFanAuth, getStoredFanAuth } from '@/lib/fanAuth'
@@ -9,7 +9,7 @@ import { useRouter } from 'next/navigation'
 import FanHeader from '@/components/FanHeader'
 import { Loader2, ChevronRight, UserPlus, Eye, EyeOff } from 'lucide-react'
 
-type View = 'list' | 'pin' | 'register'
+type View = 'list' | 'pin' | 'set-pin' | 'register'
 
 export default function FansPage() {
   const router = useRouter()
@@ -42,11 +42,23 @@ export default function FansPage() {
     }
   }
 
+  const resetSetPin = () => {
+    setNewPin('')
+    setConfirmPin('')
+    setShowPin(false)
+    setError('')
+  }
+
   const handleSelectFan = (fan: Fan) => {
     setSelectedFan(fan)
     setPin('')
     setError('')
-    setView('pin')
+    if (!fan.pin) {
+      resetSetPin()
+      setView('set-pin')
+    } else {
+      setView('pin')
+    }
   }
 
   const handleLogin = async () => {
@@ -58,6 +70,22 @@ export default function FansPage() {
       if (!snap.exists()) { setError('Fan not found.'); return }
       const fan = snap.data() as Fan
       if (fan.pin !== pin) { setError('Incorrect PIN. Try again.'); return }
+      const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name }
+      storeFanAuth(auth)
+      router.replace('/rounds')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleSetPin = async () => {
+    if (!selectedFan) return
+    if (newPin.length < 4) { setError('PIN must be at least 4 digits.'); return }
+    if (newPin !== confirmPin) { setError("PINs don't match."); return }
+    setSubmitting(true)
+    setError('')
+    try {
+      await updateDoc(doc(db, 'fans', selectedFan.id), { pin: newPin })
       const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name }
       storeFanAuth(auth)
       router.replace('/rounds')
@@ -106,6 +134,13 @@ export default function FansPage() {
               <h2 className="text-lg font-bold text-gray-900">Who are you?</h2>
               <p className="text-sm text-gray-500 mt-0.5">Pick your name to log in, or register as a new fan.</p>
             </div>
+            <button
+              onClick={() => { setView('register'); setNewName(''); setNewPin(''); setConfirmPin(''); setShowPin(false); setError('') }}
+              className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-gray-200 rounded-2xl px-4 py-4 text-sm font-semibold text-gray-400 hover:border-club-red/40 hover:text-club-red transition-all"
+            >
+              <UserPlus className="w-4 h-4" />
+              New fan? Register here
+            </button>
             <input
               type="text"
               placeholder="Search fans..."
@@ -113,13 +148,6 @@ export default function FansPage() {
               onChange={e => setSearch(e.target.value)}
               className="w-full border border-gray-200 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-club-red/30 bg-white"
             />
-            <button
-              onClick={() => { setView('register'); setError('') }}
-              className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-gray-200 rounded-2xl px-4 py-4 text-sm font-semibold text-gray-400 hover:border-club-red/40 hover:text-club-red transition-all"
-            >
-              <UserPlus className="w-4 h-4" />
-              New fan? Register here
-            </button>
             <div className="space-y-2">
               {filtered.length === 0 && (
                 <p className="text-center text-gray-400 text-sm py-6">
@@ -176,6 +204,51 @@ export default function FansPage() {
               {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
               <button onClick={handleLogin} disabled={pin.length < 4 || submitting} className="btn-primary">
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Enter Fan Zone →'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {view === 'set-pin' && selectedFan && (
+          <div className="space-y-4">
+            <button onClick={() => { setView('list'); setError('') }} className="text-sm text-gray-400 hover:text-gray-600">← Back</button>
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-club-red/10 flex items-center justify-center shrink-0">
+                <span className="text-lg font-black text-club-red">{selectedFan.name[0].toUpperCase()}</span>
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">Set your PIN</h2>
+                <p className="text-sm text-gray-500">Hi {selectedFan.name}! Create a PIN to secure your account.</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="relative">
+                <input
+                  type={showPin ? 'text' : 'password'}
+                  inputMode="numeric"
+                  placeholder="Choose a 4-digit PIN"
+                  value={newPin}
+                  onChange={e => { setNewPin(e.target.value.replace(/\D/g, '').slice(0, 6)); setError('') }}
+                  onKeyDown={e => e.key === 'Enter' && handleSetPin()}
+                  className="w-full border border-gray-200 rounded-2xl px-4 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-club-red/30 bg-white pr-12"
+                  autoFocus
+                />
+                <button type="button" onClick={() => setShowPin(s => !s)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                  {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <input
+                type={showPin ? 'text' : 'password'}
+                inputMode="numeric"
+                placeholder="Confirm PIN"
+                value={confirmPin}
+                onChange={e => { setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 6)); setError('') }}
+                onKeyDown={e => e.key === 'Enter' && handleSetPin()}
+                className="w-full border border-gray-200 rounded-2xl px-4 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-club-red/30 bg-white"
+              />
+              {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
+              <button onClick={handleSetPin} disabled={newPin.length < 4 || submitting} className="btn-primary">
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Set PIN & Enter Fan Zone →'}
               </button>
             </div>
           </div>

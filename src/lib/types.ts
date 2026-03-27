@@ -22,7 +22,10 @@ export interface Round {
   id: string
   roundNumber: number
   date: string // ISO date string YYYY-MM-DD
-  kickOffTime: string // HH:MM — used to compute vote unlock (kickOff + 90min)
+  kickOffTime: string     // HH:MM seniors KO — kept for backward compat
+  seniorsKickOff?: string // HH:MM explicit seniors kick-off
+  reservesKickOff?: string // HH:MM explicit reserves kick-off (default: seniorsKickOff - 2hrs)
+  location?: string       // ground / venue name
   isLive?: boolean   // managed by Cloud Function hourly; can also be toggled manually
   opponent: string
   venue: 'home' | 'away'
@@ -102,5 +105,28 @@ export interface FanMessage {
   team: Team
   roundId: string
   message: string
+  timestamp: number
+}
+
+// ── Support / Feature Requests ────────────────────────────────────────────────
+
+export interface SupportRequest {
+  id: string
+  fanId: string
+  fanName: string
+  fromApp: 'fans' | 'motm'
+  subject: string
+  status: 'open' | 'resolved'
+  timestamp: number
+  lastMessage?: string
+  lastMessageAt?: number
+  lastSenderRole?: 'user' | 'admin'  // for unread badge
+}
+
+export interface SupportMessage {
+  id: string
+  text: string
+  sender: 'user' | 'admin'
+  senderName: string
   timestamp: number
 }

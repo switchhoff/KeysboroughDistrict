@@ -8,7 +8,7 @@ import { getStoredFanAuth } from '@/lib/fanAuth'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import FanHeader from '@/components/FanHeader'
-import { Loader2, Trophy, MessageCircle, Send, Trash2, X, Zap, Pencil, CheckCircle, ChevronLeft } from 'lucide-react'
+import { Loader2, Trophy, MessageCircle, Send, Trash2, X, Zap, Pencil, CheckCircle, ChevronLeft, MapPin } from 'lucide-react'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatDate = (iso: string) =>
@@ -18,10 +18,10 @@ function fmtKO(hhmm: string): string {
   const [h, m] = hhmm.split(':').map(Number)
   return `KO ${(h % 12 || 12)}:${m.toString().padStart(2, '0')}${h >= 12 ? 'pm' : 'am'}`
 }
-function reservesTime(seniorsHHMM: string): string {
+function deriveReservesKO(seniorsHHMM: string): string {
   const [h, m] = seniorsHHMM.split(':').map(Number)
-  let rh = h - 2; if (rh < 0) rh += 24
-  return `${rh.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`
+  const rh = ((h - 2) + 24) % 24
+  return `${String(rh).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 function timeAgo(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000)
@@ -39,7 +39,7 @@ const voteDocId = (team: Team, fanName: string) => `${team}_${fanName.replace(/[
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface GoalEvent {
   id: string; fanId: string; fanName: string
-  team: Team; type?: 'goal' | 'whistle'
+  team: Team; type?: 'goal' | 'whistle' | 'halftime'
   scoredBy?: 'kdfc' | 'opponent'
   playerNumber?: string; playerName?: string
   timestamp: number
@@ -100,14 +100,25 @@ function FanRoundInner() {
   const [goalScoredBy,     setGoalScoredBy]     = useState<'kdfc' | 'opponent'>('kdfc')
   const [goalPlayerNum,    setGoalPlayerNum]    = useState('')
   const [goalPlayerName,   setGoalPlayerName]   = useState('')
-  const [submittingGoal,   setSubmittingGoal]   = useState(false)
-  const [submittingWhistle,setSubmittingWhistle]= useState<Team | null>(null)
+  const [submittingGoal,      setSubmittingGoal]      = useState(false)
+  const [submittingWhistle,   setSubmittingWhistle]   = useState<Team | null>(null)
+  const [submittingHalftime,  setSubmittingHalftime]  = useState<Team | null>(null)
 
   const [chatMsg,         setChatMsg]         = useState('')
   const [sendingChat,     setSendingChat]     = useState(false)
   const [editingChatId,   setEditingChatId]   = useState<string | null>(null)
   const [editingChatText, setEditingChatText] = useState('')
   const chatEndRef = useRef<HTMLDivElement>(null)
+
+  const sortPlayers = (ids: string[], map: Record<string, Player>, team: Team, r: Round) =>
+    ids.map(id => map[id]).filter(Boolean).sort((a, b) => {
+      const na = parseInt(r.numbers?.[team]?.[a.id] ?? '')
+      const nb = parseInt(r.numbers?.[team]?.[b.id] ?? '')
+      if (!isNaN(na) && !isNaN(nb)) return na - nb
+      if (!isNaN(na)) return -1
+      if (!isNaN(nb)) return 1
+      return a.name.localeCompare(b.name)
+    })
 
   // ── Bootstrap ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -116,7 +127,34 @@ function FanRoundInner() {
     setFanAuth(auth)
     if (!roundId) { router.replace('/rounds'); return }
 
-    loadAll(auth)
+    // Live round document — fires immediately then updates on any admin change
+    let roundLoaded = false
+    const unsubRound = onSnapshot(doc(db, 'rounds', roundId), async snap => {
+      if (!snap.exists()) { router.replace('/rounds'); return }
+      const r = { id: snap.id, ...snap.data() } as Round
+      setRound(r)
+
+      // One-time: load players and existing fan votes
+      if (!roundLoaded) {
+        roundLoaded = true
+        const allIds = [...new Set([...r.teamsheets.seniors, ...r.teamsheets.reserves])]
+        const pDocs  = await Promise.all(allIds.map(id => getDoc(doc(db, 'players', id))))
+        const pMap: Record<string, Player> = {}
+        pDocs.filter(d => d.exists()).forEach(d => { pMap[d.id] = { id: d.id, ...d.data() } as Player })
+        setSeniorsPlayers(sortPlayers(r.teamsheets.seniors, pMap, 'seniors', r))
+        setReservesPlayers(sortPlayers(r.teamsheets.reserves, pMap, 'reserves', r))
+
+        const [sv, rv] = await Promise.all([
+          getDoc(doc(db, 'rounds', roundId, 'fanVotes', voteDocId('seniors',  auth.fanName))),
+          getDoc(doc(db, 'rounds', roundId, 'fanVotes', voteDocId('reserves', auth.fanName))),
+        ])
+        setMyVotes({
+          seniors:  sv.exists() ? (sv.data() as FanVote).playerId : null,
+          reserves: rv.exists() ? (rv.data() as FanVote).playerId : null,
+        })
+        setLoading(false)
+      }
+    })
 
     const unsubGoals = onSnapshot(
       query(collection(db, 'rounds', roundId, 'goals'), orderBy('timestamp', 'asc')),
@@ -130,49 +168,13 @@ function FanRoundInner() {
       query(collection(db, 'rounds', roundId, 'fanVotes')),
       snap => setFanVotes(snap.docs.map(d => ({ id: d.id, ...d.data() } as FanVote)))
     )
-    return () => { unsubGoals(); unsubChat(); unsubVotes() }
+    return () => { unsubRound(); unsubGoals(); unsubChat(); unsubVotes() }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId])
 
   useEffect(() => {
     if (primaryTab === 'messages') chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chat, activeTeam, primaryTab])
-
-  const sortPlayers = (ids: string[], map: Record<string, Player>, team: Team, r: Round) =>
-    ids.map(id => map[id]).filter(Boolean).sort((a, b) => {
-      const na = parseInt(r.numbers?.[team]?.[a.id] ?? '')
-      const nb = parseInt(r.numbers?.[team]?.[b.id] ?? '')
-      if (!isNaN(na) && !isNaN(nb)) return na - nb
-      if (!isNaN(na)) return -1
-      if (!isNaN(nb)) return 1
-      return a.name.localeCompare(b.name)
-    })
-
-  const loadAll = async (auth: { fanId: string; fanName: string }) => {
-    try {
-      const snap = await getDoc(doc(db, 'rounds', roundId))
-      if (!snap.exists()) { router.replace('/rounds'); return }
-      const r = { id: snap.id, ...snap.data() } as Round
-      setRound(r)
-
-      const allIds = [...new Set([...r.teamsheets.seniors, ...r.teamsheets.reserves])]
-      const pDocs  = await Promise.all(allIds.map(id => getDoc(doc(db, 'players', id))))
-      const pMap: Record<string, Player> = {}
-      pDocs.filter(d => d.exists()).forEach(d => { pMap[d.id] = { id: d.id, ...d.data() } as Player })
-      setSeniorsPlayers(sortPlayers(r.teamsheets.seniors, pMap, 'seniors', r))
-      setReservesPlayers(sortPlayers(r.teamsheets.reserves, pMap, 'reserves', r))
-
-      const [sv, rv] = await Promise.all([
-        getDoc(doc(db, 'rounds', roundId, 'fanVotes', voteDocId('seniors',  auth.fanName))),
-        getDoc(doc(db, 'rounds', roundId, 'fanVotes', voteDocId('reserves', auth.fanName))),
-      ])
-      setMyVotes({
-        seniors:  sv.exists() ? (sv.data() as FanVote).playerId : null,
-        reserves: rv.exists() ? (rv.data() as FanVote).playerId : null,
-      })
-
-    } finally { setLoading(false) }
-  }
 
   // ── Actions ──────────────────────────────────────────────────────────────────
   const submitGoal = async () => {
@@ -200,6 +202,16 @@ function FanRoundInner() {
         fanId: fanAuth.fanId, fanName: fanAuth.fanName, team, type: 'whistle', timestamp: Date.now(),
       })
     } finally { setSubmittingWhistle(null) }
+  }
+
+  const submitHalftime = async (team: Team) => {
+    if (!fanAuth || submittingHalftime) return
+    setSubmittingHalftime(team)
+    try {
+      await addDoc(collection(db, 'rounds', roundId, 'goals'), {
+        fanId: fanAuth.fanId, fanName: fanAuth.fanName, team, type: 'halftime', timestamp: Date.now(),
+      })
+    } finally { setSubmittingHalftime(null) }
   }
 
   const handleVote = async (team: Team, playerId: string) => {
@@ -253,8 +265,9 @@ function FanRoundInner() {
   const players       = activeTeam === 'seniors' ? seniorsPlayers : reservesPlayers
   const myVote        = myVotes[activeTeam]
   const teamEvents    = goals.filter(g => g.team === activeTeam)
-  const teamGoals     = teamEvents.filter(g => g.type !== 'whistle')
+  const teamGoals     = teamEvents.filter(g => !g.type || g.type === 'goal')
   const hasWhistle    = teamEvents.some(g => g.type === 'whistle')
+  const hasHalftime   = teamEvents.some(g => g.type === 'halftime')
   const liveScore     = {
     kdfc: teamGoals.filter(g => g.scoredBy === 'kdfc').length,
     opp:  teamGoals.filter(g => g.scoredBy === 'opponent').length,
@@ -274,9 +287,11 @@ function FanRoundInner() {
     : { text: 'text-green-600', bg: 'bg-green-50',   hover: 'hover:bg-green-100',
         btn: 'bg-green-600 hover:bg-green-700', ring: 'focus-within:ring-green-500/30', inputRing: 'focus:ring-green-500/30' }
 
-  const kickTime = round.kickOffTime
-    ? fmtKO(activeTeam === 'reserves' ? reservesTime(round.kickOffTime) : round.kickOffTime)
-    : null
+  const senKO    = round.seniorsKickOff  ?? round.kickOffTime ?? null
+  const resKO    = round.reservesKickOff ?? (senKO ? deriveReservesKO(senKO) : null)
+  const kickTime = activeTeam === 'reserves'
+    ? (resKO ? fmtKO(resKO) : null)
+    : (senKO ? fmtKO(senKO) : null)
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -293,7 +308,15 @@ function FanRoundInner() {
           <div>
             <div className="text-xs text-club-red font-semibold uppercase tracking-widest">Round {round.roundNumber}</div>
             <div className="font-black text-gray-900 text-lg leading-tight">vs {round.opponent}</div>
-            <div className="text-xs text-gray-400 mt-0.5">{formatDate(round.date)} · {round.venue === 'home' ? 'Home' : 'Away'}</div>
+            <div className="text-xs text-gray-400 mt-0.5">{formatDate(round.date)}</div>
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-0.5">
+              <span className={`font-semibold ${round.venue === 'home' ? 'text-club-red' : 'text-gray-500'}`}>
+                {round.venue === 'home' ? 'Home' : 'Away'}
+              </span>
+              {round.location && (
+                <><span className="text-gray-300">·</span><MapPin className="w-3 h-3 shrink-0" />{round.location}</>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -355,18 +378,37 @@ function FanRoundInner() {
 
             {/* Game Feed */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Game Feed</h2>
-                  {teamGoals.length > 0 && (
-                    <span className={`text-xs font-black px-2 py-0.5 rounded-full ${accent.bg} ${accent.text}`}>
-                      {liveScore.kdfc} – {liveScore.opp}
-                    </span>
-                  )}
-                  {hasWhistle && <span className="text-xs font-bold text-gray-400">FT</span>}
+              <div className="flex items-start justify-between mb-1">
+                <div>
+                  <h2 className="font-black text-gray-900 text-base leading-tight flex items-center gap-2">
+                    Game Feed
+                    {teamGoals.length > 0 && (() => {
+                      const scoreCls =
+                        liveScore.kdfc > liveScore.opp  ? 'bg-green-100 text-green-700' :
+                        liveScore.kdfc === liveScore.opp ? 'bg-amber-100 text-amber-700' :
+                                                           'bg-red-100 text-red-600'
+                      return (
+                        <span className={`text-xs font-black px-2 py-0.5 rounded-full ${scoreCls}`}>
+                          {liveScore.kdfc} – {liveScore.opp}
+                        </span>
+                      )
+                    })()}
+                    {hasWhistle   && <span className="text-xs font-bold text-gray-400">FT</span>}
+                    {!hasWhistle && hasHalftime && <span className="text-xs font-bold text-amber-500">HT</span>}
+                  </h2>
+                  <p className="text-sm text-gray-400">Live match events</p>
                 </div>
                 {!isFormOpen && !hasWhistle && (
                   <div className="flex items-center gap-1.5">
+                    {!hasHalftime && (
+                      <button
+                        onClick={() => submitHalftime(activeTeam)}
+                        disabled={submittingHalftime === activeTeam}
+                        className="flex items-center gap-1 text-xs font-bold text-amber-600 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded-full transition-colors disabled:opacity-50"
+                      >
+                        {submittingHalftime === activeTeam ? <Loader2 className="w-3 h-3 animate-spin" /> : '+ Half Time'}
+                      </button>
+                    )}
                     <button
                       onClick={() => submitWhistle(activeTeam)}
                       disabled={submittingWhistle === activeTeam}
@@ -430,38 +472,80 @@ function FanRoundInner() {
                 <div className="space-y-1.5">
                   {teamEvents.map(g => {
                     const isWhistle = g.type === 'whistle'
+                    const canDelete = g.fanId === fanAuth?.fanId
+
+                    // ── Half Time ──────────────────────────────────────────
+                    if (g.type === 'halftime') return (
+                      <div key={g.id} className="flex items-center gap-2">
+                        <div className="flex-1 flex items-center justify-center gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5">
+                          <span className="text-base leading-none shrink-0">⏸️</span>
+                          <div className="text-center">
+                            <div className="font-bold text-amber-700 text-sm">Half Time</div>
+                            <div className="text-xs text-gray-400">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                          </div>
+                        </div>
+                        {canDelete ? (
+                          <button onClick={() => deleteGoal(g.id)} className="w-9 h-full min-h-[44px] flex items-center justify-center bg-white border border-gray-200 rounded-xl text-gray-300 hover:text-red-400 hover:border-red-200 transition-colors shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : <div className="w-9 shrink-0" />}
+                      </div>
+                    )
+
+                    // ── Full Time ──────────────────────────────────────────
                     if (isWhistle) return (
-                      <div key={g.id} className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5">
-                        <div className="flex items-center gap-2.5">
+                      <div key={g.id} className="flex items-center gap-2">
+                        <div className="flex-1 flex items-center justify-center gap-2.5 bg-gray-100 border border-gray-200 rounded-xl px-4 py-2.5">
                           <span className="text-base leading-none shrink-0">⏱️</span>
-                          <div>
+                          <div className="text-center">
                             <div className="font-bold text-gray-600 text-sm">Full Time</div>
                             <div className="text-xs text-gray-400">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
                           </div>
                         </div>
-                        {g.fanId === fanAuth?.fanId && (
-                          <button onClick={() => deleteGoal(g.id)} className="p-1.5 text-gray-300 hover:text-red-400 transition-colors shrink-0"><Trash2 className="w-4 h-4" /></button>
-                        )}
+                        {canDelete ? (
+                          <button onClick={() => deleteGoal(g.id)} className="w-9 h-full min-h-[44px] flex items-center justify-center bg-white border border-gray-200 rounded-xl text-gray-300 hover:text-red-400 hover:border-red-200 transition-colors shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : <div className="w-9 shrink-0" />}
                       </div>
                     )
-                    return (
-                      <div key={g.id} className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-4 py-2.5">
-                        <div>
-                          <div className="font-semibold text-gray-800 text-sm">
-                            {g.scoredBy === 'kdfc' ? (
-                              <>⚽ KDFC{(g.playerNumber || g.playerName) && (
-                                <span className="text-gray-500 font-medium">
-                                  {' · '}{g.playerNumber && <span className="font-bold">#{g.playerNumber}</span>}
-                                  {g.playerNumber && g.playerName && ' '}{g.playerName}
-                                </span>
-                              )}</>
-                            ) : `⚽ ${round.opponent}`}
+
+                    // ── KDFC goal — red, left-aligned ──────────────────────
+                    if (g.scoredBy === 'kdfc') return (
+                      <div key={g.id} className="flex items-center gap-2">
+                        <div className={`flex-1 ${accent.bg} border ${accent.text === 'text-club-red' ? 'border-club-red/20' : 'border-green-200'} rounded-xl px-4 py-2.5`}>
+                          <div className={`font-semibold text-sm ${accent.text}`}>
+                            ⚽ KDFC{(g.playerNumber || g.playerName) && (
+                              <span className="font-medium opacity-80">
+                                {' · '}{g.playerNumber && <span className="font-bold">#{g.playerNumber}</span>}
+                                {g.playerNumber && g.playerName && ' '}{g.playerName}
+                              </span>
+                            )}
                           </div>
-                          <div className="text-xs text-gray-400">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                          <div className="text-xs text-gray-400 mt-0.5">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
                         </div>
-                        {g.fanId === fanAuth?.fanId && (
-                          <button onClick={() => deleteGoal(g.id)} className="p-1.5 text-gray-300 hover:text-red-400 transition-colors shrink-0"><Trash2 className="w-4 h-4" /></button>
-                        )}
+                        {canDelete ? (
+                          <button onClick={() => deleteGoal(g.id)} className="w-9 h-full min-h-[44px] flex items-center justify-center bg-white border border-gray-200 rounded-xl text-gray-300 hover:text-red-400 hover:border-red-200 transition-colors shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : <div className="w-9 shrink-0" />}
+                      </div>
+                    )
+
+                    // ── Opposition goal — white, right-aligned ─────────────
+                    return (
+                      <div key={g.id} className="flex items-center gap-2">
+                        <div className="flex-1 bg-white border border-gray-200 rounded-xl px-4 py-2.5 flex items-center justify-end gap-2.5">
+                          <div className="text-right">
+                            <div className="font-semibold text-gray-700 text-sm">{round.opponent} ⚽</div>
+                            <div className="text-xs text-gray-400 mt-0.5">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                          </div>
+                        </div>
+                        {canDelete ? (
+                          <button onClick={() => deleteGoal(g.id)} className="w-9 h-full min-h-[44px] flex items-center justify-center bg-white border border-gray-200 rounded-xl text-gray-300 hover:text-red-400 hover:border-red-200 transition-colors shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : <div className="w-9 shrink-0" />}
                       </div>
                     )
                   })}
@@ -492,9 +576,11 @@ function FanRoundInner() {
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-club-red/10 flex items-center justify-center shrink-0">
-                        <span className="text-sm font-bold text-club-red">{p.name[0]}</span>
+                        <span className="text-sm font-bold text-club-red">
+                          {round?.numbers?.[activeTeam]?.[p.id] ?? p.name[0]}
+                        </span>
                       </div>
-                      <span className="font-semibold text-gray-800 text-sm">{playerNum(activeTeam, p.id)}{p.name}</span>
+                      <span className="font-semibold text-gray-800 text-sm">{p.name}</span>
                     </div>
                     <Trophy className="w-4 h-4 text-gray-200 group-hover:text-club-red transition-colors" />
                   </button>
@@ -506,7 +592,7 @@ function FanRoundInner() {
                   <div className="flex items-center gap-2">
                     <CheckCircle className="w-4 h-4 text-green-600 shrink-0" />
                     <span className="text-sm font-semibold text-green-700">
-                      Voted · {playerNum(activeTeam, myVote)}{players.find(p => p.id === myVote)?.name}
+                      Voted · {players.find(p => p.id === myVote)?.name}
                     </span>
                   </div>
                   <button onClick={() => handleCancelVote(activeTeam)}
@@ -524,7 +610,10 @@ function FanRoundInner() {
                           <div className="flex items-center gap-2">
                             {i === 0 && count > 0 && <Trophy className="w-3.5 h-3.5 text-amber-400" />}
                             <span className={`text-sm font-semibold ${player.id === myVote ? 'text-club-red' : 'text-gray-700'}`}>
-                              {playerNum(activeTeam, player.id)}{player.name}
+                              {round?.numbers?.[activeTeam]?.[player.id] && (
+                                <span className="text-xs font-bold opacity-50 mr-1">#{round.numbers[activeTeam]![player.id]}</span>
+                              )}
+                              {player.name}
                               {player.id === myVote && <span className="text-xs text-club-red/60 ml-1">(you)</span>}
                             </span>
                           </div>
@@ -548,8 +637,10 @@ function FanRoundInner() {
         {primaryTab === 'messages' && (
           <div className="space-y-2">
             <div className="mb-1">
-              <h2 className="font-black text-gray-900 text-base leading-tight">Noticeboard</h2>
-              <p className="text-sm text-gray-400">Post a message for the team</p>
+              <h2 className="font-black text-gray-900 text-base leading-tight">
+                {activeTeam === 'seniors' ? 'Seniors' : 'Reserves'} Noticeboard
+              </h2>
+              <p className="text-sm text-gray-400">Post a message for the {activeTeam === 'seniors' ? 'Seniors' : 'Reserves'}</p>
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden shadow-sm">
               <div className="h-52 overflow-y-auto p-3 space-y-3">

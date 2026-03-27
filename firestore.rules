@@ -45,6 +45,12 @@ service cloud.firestore {
         allow create: if true;
         allow update, delete: if true;   // UI restricts to the sending fan
       }
+
+      match /predictions/{predId} {
+        allow read: if true;
+        allow create, update: if true;   // setDoc upserts fan prediction
+        allow delete: if false;
+      }
     }
 
     // collectionGroup queries
@@ -65,6 +71,24 @@ service cloud.firestore {
       allow read: if true;
       allow create: if true;
       allow update, delete: if false;
+    }
+
+    match /{path=**}/chat/{chatId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if true;
+    }
+
+    // ── Support requests ─────────────────────────────────────────────────────
+    match /support/{requestId} {
+      allow read, create: if true;
+      allow update: if true;   // fans update lastMessage; admin updates status
+      allow delete: if false;
+
+      match /messages/{msgId} {
+        allow read, create: if true;
+        allow update, delete: if false;
+      }
     }
 
     // ── Fans ─────────────────────────────────────────────────────────────────

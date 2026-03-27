@@ -44,10 +44,47 @@ function FanVoteInner() {
     return n ? `#${n} ` : ''
   }
 
+  // Live round listener — fires immediately then updates when round doc changes
   useEffect(() => {
-    if (!fanAuth) { router.replace('/'); return }
+    const auth = getStoredFanAuth()
+    if (!auth) { router.replace('/'); return }
     if (!roundId) { router.replace('/rounds'); return }
-    loadData()
+
+    setLoading(true)
+    let initialLoad = true
+
+    const unsub = onSnapshot(doc(db, 'rounds', roundId), async snap => {
+      if (!snap.exists()) { router.replace('/rounds'); return }
+      const roundData = { id: snap.id, ...snap.data() } as Round
+      setRound(roundData)
+
+      // One-time: load players, existing vote, and sent messages
+      if (initialLoad) {
+        initialLoad = false
+        const teamsheet = roundData.teamsheets[team] ?? []
+        const playerDocs = await Promise.all(teamsheet.map(id => getDoc(doc(db, 'players', id))))
+        setPlayers(
+          playerDocs.filter(d => d.exists())
+            .map(d => ({ id: d.id, ...d.data() } as Player))
+            .sort((a, b) => a.name.localeCompare(b.name))
+        )
+        const vId = voteDocId(team, auth.fanName)
+        const vSnap = await getDoc(doc(db, 'rounds', roundId, 'fanVotes', vId))
+        if (vSnap.exists()) setMyVote((vSnap.data() as FanVote).playerId)
+
+        const msgSnap = await getDocs(collection(db, 'rounds', roundId, 'messages'))
+        const mine: Record<string, { docId: string; text: string }> = {}
+        msgSnap.docs.forEach(d => {
+          const data = d.data() as FanMessage
+          if (data.fanId === auth.fanId && data.team === team) {
+            mine[data.playerId] = { docId: d.id, text: data.message }
+          }
+        })
+        setMyMessages(mine)
+        setLoading(false)
+      }
+    })
+    return unsub
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId, team])
 
@@ -62,43 +99,6 @@ function FanVoteInner() {
     )
     return unsub
   }, [roundId, team])
-
-  const loadData = async () => {
-    try {
-      const roundSnap = await getDoc(doc(db, 'rounds', roundId))
-      if (!roundSnap.exists()) { router.replace('/rounds'); return }
-      const roundData = { id: roundSnap.id, ...roundSnap.data() } as Round
-      setRound(roundData)
-
-      const teamsheet = roundData.teamsheets[team] ?? []
-      const playerDocs = await Promise.all(teamsheet.map(id => getDoc(doc(db, 'players', id))))
-      setPlayers(
-        playerDocs.filter(d => d.exists())
-          .map(d => ({ id: d.id, ...d.data() } as Player))
-          .sort((a, b) => a.name.localeCompare(b.name))
-      )
-
-      if (fanAuth) {
-        // Check existing vote
-        const vId = voteDocId(team, fanAuth.fanName)
-        const vSnap = await getDoc(doc(db, 'rounds', roundId, 'fanVotes', vId))
-        if (vSnap.exists()) setMyVote((vSnap.data() as FanVote).playerId)
-
-        // Load all my messages for this round+team
-        const msgSnap = await getDocs(collection(db, 'rounds', roundId, 'messages'))
-        const mine: Record<string, { docId: string; text: string }> = {}
-        msgSnap.docs.forEach(d => {
-          const data = d.data() as FanMessage
-          if (data.fanId === fanAuth.fanId && data.team === team) {
-            mine[data.playerId] = { docId: d.id, text: data.message }
-          }
-        })
-        setMyMessages(mine)
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const handleVote = async (playerId: string) => {
     if (!fanAuth || myVote) return   // can't vote while a vote is already set — must cancel first

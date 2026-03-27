@@ -31,7 +31,7 @@ export default function VoteTile({ round, team }: VoteTileProps) {
             <div className="font-bold text-gray-900 text-base">
               vs {round.opponent}
             </div>
-            <div className="text-sm text-gray-500 mt-0.5">{formatDate(round.date)} · Rd {round.roundNumber}</div>
+            <div className="text-sm text-gray-500 mt-0.5">Round {round.roundNumber} · {formatDate(round.date)}</div>
             <div className="mt-1 flex items-center gap-1.5">
               <span className="inline-flex items-center gap-1 bg-club-red/10 text-club-red text-xs font-semibold px-2.5 py-1 rounded-full">
                 {TEAM_LABEL[team]}

@@ -76,7 +76,7 @@ export default function FanRoundsPage() {
               <div>
                 <div className="font-bold text-gray-900">vs {round.opponent}</div>
                 <div className="text-xs text-gray-500 mt-0.5">
-                  {formatDate(round.date)} · Rd {round.roundNumber}
+                  Round {round.roundNumber} · {formatDate(round.date)}
                 </div>
                 {status === 'completed' && round.results && (
                   <div className="flex gap-2 mt-1">
