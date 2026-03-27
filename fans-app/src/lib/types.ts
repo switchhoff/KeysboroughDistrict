@@ -97,17 +97,6 @@ export interface FanVote {
   timestamp: number
 }
 
-export interface FanMessage {
-  id: string
-  fanId: string
-  fanName: string
-  playerId: string    // player being messaged
-  team: Team
-  roundId: string
-  message: string
-  timestamp: number
-}
-
 // ── Support / Feature Requests ────────────────────────────────────────────────
 
 export interface SupportRequest {
@@ -128,5 +117,16 @@ export interface SupportMessage {
   text: string
   sender: 'user' | 'admin'
   senderName: string
+  timestamp: number
+}
+
+export interface FanMessage {
+  id: string
+  fanId: string
+  fanName: string
+  playerId: string    // player being messaged
+  team: Team
+  roundId: string
+  message: string
   timestamp: number
 }

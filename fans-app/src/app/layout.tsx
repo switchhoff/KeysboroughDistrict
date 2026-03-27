@@ -1,15 +1,18 @@
 import type { Metadata, Viewport } from 'next'
+import { Inter } from 'next/font/google'
 import './globals.css'
 import ServiceWorkerSetup from '@/components/ServiceWorkerSetup'
 
+const inter = Inter({ subsets: ['latin'] })
+
 export const metadata: Metadata = {
-  title: 'KDFC MOTM — Man of the Match Voting',
-  description: '3-2-1 Man of the Match voting for Keysborough District FC',
+  title: 'KDFC Fan Zone',
+  description: 'Keysborough District FC — Fan Zone',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'KDFC MOTM',
+    title: 'KDFC Fan Zone',
   },
   icons: {
     icon: '/logo.png',
@@ -30,7 +33,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-gray-50">
+      <body className={inter.className}>
         <ServiceWorkerSetup />
         {children}
       </body>

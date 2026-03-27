@@ -1,13 +1,16 @@
 import { Round, Team } from './types'
 
 /** Returns the kick-off time for a given team.
- *  Seniors kick-off is stored on the round; Reserves always kick off 2 hours earlier. */
+ *  Uses explicit seniorsKickOff/reservesKickOff if set, otherwise falls back to kickOffTime. */
 export function kickOffTime(round: Round, team: Team): Date {
-  if (!round.kickOffTime) return new Date(`${round.date}T12:00:00`)
-  const seniors = new Date(`${round.date}T${round.kickOffTime}:00`)
-  return team === 'reserves'
-    ? new Date(seniors.getTime() - 2 * 60 * 60 * 1000)
-    : seniors
+  if (team === 'reserves') {
+    if (round.reservesKickOff) return new Date(`${round.date}T${round.reservesKickOff}:00`)
+    const sBase = round.seniorsKickOff ?? round.kickOffTime
+    if (!sBase) return new Date(`${round.date}T10:00:00`)
+    return new Date(new Date(`${round.date}T${sBase}:00`).getTime() - 2 * 60 * 60 * 1000)
+  }
+  const sBase = round.seniorsKickOff ?? round.kickOffTime
+  return sBase ? new Date(`${round.date}T${sBase}:00`) : new Date(`${round.date}T12:00:00`)
 }
 
 /** Returns the datetime after which voting opens for a team (kick-off + 90 minutes) */

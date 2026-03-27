@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { collection, collectionGroup, getDocs, doc, getDoc, query, orderBy, onSnapshot } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { useAuth } from '@/lib/auth'
 import { Round, PendingVote, Team, Player } from '@/lib/types'
@@ -10,7 +10,8 @@ import { useRouter } from 'next/navigation'
 import Header from '@/components/Header'
 import VoteTile from '@/components/VoteTile'
 import Link from 'next/link'
-import { CheckCircle, ChevronRight, Loader2, Trophy, Target } from 'lucide-react'
+import Image from 'next/image'
+import { Calendar, CheckCircle, ChevronRight, ClipboardList, Loader2, MapPin, Trophy, Target, MessageSquare, X, Zap } from 'lucide-react'
 
 interface SubmittedVote { round: Round; team: Team }
 
@@ -18,6 +19,18 @@ const TEAM_LABEL: Record<Team, string> = { reserves: 'Reserves', seniors: 'Senio
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+
+function deriveReservesKO(seniorsHHMM: string): string {
+  const [h, m] = seniorsHHMM.split(':').map(Number)
+  const rh = ((h - 2) + 24) % 24
+  return `${String(rh).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+function fmtKO(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number)
+  const period = h >= 12 ? 'pm' : 'am'
+  return `KO ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')} ${period}`
+}
 
 const rankBg = (i: number) =>
   i === 0 ? 'bg-amber-100 text-amber-600' :
@@ -28,6 +41,8 @@ const rankBg = (i: number) =>
 // ─── Shared Stats Panel ───────────────────────────────────────────────────────
 
 type StatFilter = 'all' | 'goals' | 'assists'
+
+interface NoticeMsg { id: string; fanName: string; message: string; timestamp: number; team?: Team }
 
 function StatsPanel({ rounds, players, loading }: {
   rounds: Round[]
@@ -65,8 +80,6 @@ function StatsPanel({ rounds, players, loading }: {
       .filter(e => e.goals > 0 || e.assists > 0)
       .sort((a, b) => b.goals - a.goals || b.assists - a.assists)
   })()
-
-  const completedRounds = rounds.filter(r => r.results?.[team] != null).reverse()
 
   if (loading) {
     return (
@@ -167,10 +180,184 @@ function StatsPanel({ rounds, players, loading }: {
         )}
       </div>
 
-      {/* Results */}
+    </div>
+  )
+}
+
+// ─── Fixtures Panel ───────────────────────────────────────────────────────────
+
+function FixturesPanel({ rounds, loading }: { rounds: Round[]; loading: boolean }) {
+  const today = new Date(new Date().toDateString())
+  const liveRounds     = rounds.filter(r => r.isLive)
+  const upcomingRounds = rounds.filter(r => !r.isLive && new Date(r.date) >= today)
+  const allFixtures    = [...liveRounds, ...upcomingRounds]
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-8 h-8 animate-spin text-club-red" />
+      </div>
+    )
+  }
+
+  if (allFixtures.length === 0) {
+    return (
+      <div className="bg-gray-50 rounded-2xl border border-gray-100 px-4 py-6 text-center text-sm text-gray-400">
+        No upcoming fixtures scheduled.
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {allFixtures.map(round => {
+        const isLive = round.isLive
+        const senKO  = round.seniorsKickOff ?? round.kickOffTime ?? null
+        const resKO  = round.reservesKickOff ?? (senKO ? deriveReservesKO(senKO) : null)
+        return (
+          <div
+            key={round.id}
+            className={`bg-white border rounded-2xl px-4 py-4 ${
+              isLive ? 'border-club-red/30 shadow-sm' : 'border-gray-100'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              {isLive ? (
+                <div className="w-10 h-10 rounded-xl bg-club-red/10 flex items-center justify-center shrink-0">
+                  <Zap className="w-5 h-5 text-club-red" />
+                </div>
+              ) : (
+                <Image src="/logo.png" alt="KDFC" width={40} height={40} className="rounded-full shrink-0" />
+              )}
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="font-bold text-gray-900">vs {round.opponent}</div>
+                  {isLive && (
+                    <span className="text-[10px] font-bold text-club-red bg-club-red/10 px-2 py-0.5 rounded-full uppercase tracking-wide animate-pulse">
+                      Live
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  Round {round.roundNumber} · {formatDate(round.date)}
+                </div>
+                {(resKO || senKO) && (
+                  <div className="text-xs text-gray-400 mt-0.5">
+                    {resKO && <>Reserves {fmtKO(resKO)}</>}
+                    {resKO && senKO && ' · '}
+                    {senKO && <>Seniors {fmtKO(senKO)}</>}
+                  </div>
+                )}
+                {(round.location || round.venue) && (
+                  <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
+                    {round.venue && (
+                      <span className={`font-semibold mr-0.5 ${round.venue === 'home' ? 'text-club-red' : 'text-gray-500'}`}>
+                        {round.venue === 'home' ? 'Home' : 'Away'}
+                      </span>
+                    )}
+                    {round.location && (
+                      <><MapPin className="w-3 h-3 shrink-0" />{round.location}</>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Results Panel ────────────────────────────────────────────────────────────
+
+function ResultsPanel({ rounds, loading }: { rounds: Round[]; loading: boolean }) {
+  const [team, setTeam] = useState<Team>('seniors')
+
+  // Noticeboard modal
+  const [noticeModal,    setNoticeModal]    = useState<{ roundId: string; opponent: string; team: Team } | null>(null)
+  const [noticeMessages, setNoticeMessages] = useState<NoticeMsg[]>([])
+  const [noticeLoading,  setNoticeLoading]  = useState(false)
+  const [noticeCounts,   setNoticeCounts]   = useState<Record<string, number>>({})
+  const noticeUnsubRef = useRef<(() => void) | null>(null)
+
+  // Real-time message counts
+  useEffect(() => {
+    const unsub = onSnapshot(collectionGroup(db, 'chat'), snap => {
+      const counts: Record<string, number> = {}
+      snap.docs.forEach(d => {
+        const data    = d.data() as NoticeMsg
+        const roundId = d.ref.parent.parent?.id
+        if (!roundId) return
+        const teams: Team[] = data.team ? [data.team] : ['seniors', 'reserves']
+        teams.forEach(tm => {
+          const key = `${roundId}_${tm}`
+          counts[key] = (counts[key] ?? 0) + 1
+        })
+      })
+      setNoticeCounts(counts)
+    })
+    return () => unsub()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const closeNoticeboard = () => {
+    noticeUnsubRef.current?.()
+    noticeUnsubRef.current = null
+    setNoticeModal(null)
+    setNoticeMessages([])
+  }
+
+  const openNoticeboard = (roundId: string, opponent: string) => {
+    // Clean up any existing listener
+    noticeUnsubRef.current?.()
+    setNoticeModal({ roundId, opponent, team })
+    setNoticeMessages([])
+    setNoticeLoading(true)
+    const activeTeam = team
+    noticeUnsubRef.current = onSnapshot(
+      query(collection(db, 'rounds', roundId, 'chat'), orderBy('timestamp', 'asc')),
+      snap => {
+        const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as NoticeMsg))
+        setNoticeMessages(all.filter(m => !m.team || m.team === activeTeam))
+        setNoticeLoading(false)
+      }
+    )
+  }
+
+  const completedRounds = rounds.filter(r => r.results?.[team] != null).reverse()
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-8 h-8 animate-spin text-club-red" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+
+      {/* Team filter */}
+      <div className="flex rounded-xl overflow-hidden border border-gray-200 text-sm font-semibold">
+        {(['seniors', 'reserves'] as Team[]).map(t => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTeam(t)}
+            className={`flex-1 py-2.5 transition-colors ${
+              team === t ? 'bg-club-red text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
+            }`}
+          >
+            {TEAM_LABEL[t]}
+          </button>
+        ))}
+      </div>
+
+      {/* Results list */}
       <div>
         <div className="flex items-center gap-2 mb-3">
-          <Trophy className="w-4 h-4 text-club-red" />
+          <ClipboardList className="w-4 h-4 text-club-red" />
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
             Results — {TEAM_LABEL[team]}
           </span>
@@ -182,20 +369,29 @@ function StatsPanel({ rounds, players, loading }: {
         ) : (
           <div className="space-y-2">
             {completedRounds.map(round => {
-              const result = round.results![team]!
-              const won = result.goalsFor > result.goalsAgainst
-              const drew = result.goalsFor === result.goalsAgainst
+              const result   = round.results![team]!
+              const won      = result.goalsFor > result.goalsAgainst
+              const drew     = result.goalsFor === result.goalsAgainst
               const outcomeBg = won ? 'bg-club-green text-white' : drew ? 'bg-amber-400 text-white' : 'bg-club-red text-white'
               return (
-                <div
-                  key={round.id}
-                  className="bg-white rounded-2xl border border-gray-100 px-4 py-3.5 flex items-center justify-between"
-                >
+                <div key={round.id} className="bg-white rounded-2xl border border-gray-100 px-4 py-3.5 flex items-center justify-between">
                   <div>
                     <div className="font-semibold text-gray-900 text-sm">vs {round.opponent}</div>
                     <div className="text-xs text-gray-400 mt-0.5">
-                      {formatDate(round.date)} · Rd {round.roundNumber} · {round.venue === 'home' ? 'Home' : 'Away'}
+                      Round {round.roundNumber} · {formatDate(round.date)}
                     </div>
+                    {(round.location || round.venue) && (
+                      <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
+                        {round.venue && (
+                          <span className={`font-semibold mr-0.5 ${round.venue === 'home' ? 'text-club-red' : 'text-gray-500'}`}>
+                            {round.venue === 'home' ? 'Home' : 'Away'}
+                          </span>
+                        )}
+                        {round.location && (
+                          <><MapPin className="w-3 h-3 shrink-0" />{round.location}</>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2.5">
                     <div className="text-lg font-black text-gray-900 leading-none">
@@ -204,6 +400,17 @@ function StatsPanel({ rounds, players, loading }: {
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ${outcomeBg}`}>
                       {won ? 'W' : drew ? 'D' : 'L'}
                     </div>
+                    <button
+                      onClick={() => openNoticeboard(round.id, round.opponent)}
+                      className="relative p-1.5 text-gray-300 hover:text-club-red transition-colors"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      {(noticeCounts[`${round.id}_${team}`] ?? 0) > 0 && (
+                        <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 bg-club-red text-white text-[9px] font-black rounded-full flex items-center justify-center px-0.5 leading-none">
+                          {noticeCounts[`${round.id}_${team}`]}
+                        </span>
+                      )}
+                    </button>
                   </div>
                 </div>
               )
@@ -212,6 +419,37 @@ function StatsPanel({ rounds, players, loading }: {
         )}
       </div>
 
+      {/* Noticeboard modal */}
+      {noticeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={closeNoticeboard}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100">
+              <div>
+                <div className="font-black text-gray-900">{TEAM_LABEL[noticeModal.team]} Noticeboard</div>
+                <div className="text-xs text-gray-400 mt-0.5">vs {noticeModal.opponent} · Fan Messages</div>
+              </div>
+              <button onClick={closeNoticeboard} className="p-2 text-gray-400 hover:text-gray-600 rounded-xl hover:bg-gray-100 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-3">
+              {noticeLoading ? (
+                <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-club-red" /></div>
+              ) : noticeMessages.length === 0 ? (
+                <p className="text-center text-gray-400 text-sm py-8">No messages posted yet.</p>
+              ) : noticeMessages.map(m => (
+                <div key={m.id} className="bg-gray-50 rounded-xl px-4 py-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold text-club-red">{m.fanName}</span>
+                    <span className="text-[10px] text-gray-400">{new Date(m.timestamp).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: true })}</span>
+                  </div>
+                  <p className="text-sm text-gray-700">{m.message}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -223,25 +461,27 @@ export default function DashboardPage() {
   const auth = useAuth()
 
   const isCoach = auth?.role === 'coach'
-  const [tab, setTab] = useState<'votes' | 'stats'>('votes')
+  const [tab, setTab] = useState<'votes' | 'stats' | 'fixtures' | 'results'>('votes')
 
   // Votes state
   const [pending, setPending] = useState<PendingVote[]>([])
   const [submitted, setSubmitted] = useState<SubmittedVote[]>([])
   const [votesLoading, setVotesLoading] = useState(true)
 
-  // Stats state (lazy — loaded on first visit to Stats tab, or immediately for coaches)
+  // Stats state (lazy — listener started on first visit to Stats/Results tab, or immediately for coaches)
   const [rounds, setRounds] = useState<Round[]>([])
   const [players, setPlayers] = useState<Player[]>([])
   const [statsLoading, setStatsLoading] = useState(false)
-  const [statsLoaded, setStatsLoaded] = useState(false)
+  const statsUnsubRef = useRef<(() => void) | null>(null)
 
-  const loadVotes = useCallback(async () => {
+  // Live votes listener — re-evaluates pending/submitted whenever rounds collection changes
+  useEffect(() => {
     if (!auth || auth.role === 'coach') return
     setVotesLoading(true)
-    try {
-      const roundsSnap = await getDocs(collection(db, 'rounds'))
-      const allRounds = roundsSnap.docs
+    let cancelled = false
+    const unsub = onSnapshot(collection(db, 'rounds'), async snap => {
+      if (cancelled) return
+      const allRounds = snap.docs
         .map(d => ({ id: d.id, ...d.data() } as Round))
         .sort((a, b) => a.roundNumber - b.roundNumber)
       const pendingVotes: PendingVote[] = []
@@ -251,54 +491,54 @@ export default function DashboardPage() {
           if (!round.teamsheets[team].includes(auth.playerId)) continue
           if (new Date() < voteUnlockTime(round, team)) continue
           const voteSnap = await getDoc(doc(db, 'rounds', round.id, 'votes', `${team}_${auth.playerId}`))
+          if (cancelled) return
           if (voteSnap.exists()) submittedVotes.push({ round, team })
           else pendingVotes.push({ round, team })
         }
       }
-      setPending(pendingVotes)
-      setSubmitted(submittedVotes)
-    } finally {
-      setVotesLoading(false)
-    }
+      if (!cancelled) {
+        setPending(pendingVotes)
+        setSubmitted(submittedVotes)
+        setVotesLoading(false)
+      }
+    })
+    return () => { cancelled = true; unsub() }
   }, [auth])
 
-  const loadStats = useCallback(async () => {
-    if (statsLoaded) return
+  // Live stats listener — started lazily; players loaded once, rounds stay live
+  const startStatsListener = useCallback(() => {
+    if (statsUnsubRef.current) return // already listening
     setStatsLoading(true)
-    try {
-      const [roundsSnap, playersSnap] = await Promise.all([
-        getDocs(collection(db, 'rounds')),
-        getDocs(collection(db, 'players')),
-      ])
-      setRounds(
-        roundsSnap.docs
-          .map(d => ({ id: d.id, ...d.data() } as Round))
-          .sort((a, b) => a.roundNumber - b.roundNumber)
-      )
-      setPlayers(playersSnap.docs.map(d => ({ id: d.id, ...d.data() } as Player)))
-      setStatsLoaded(true)
-    } finally {
-      setStatsLoading(false)
-    }
-  }, [statsLoaded])
+    getDocs(collection(db, 'players')).then(snap =>
+      setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Player)))
+    )
+    statsUnsubRef.current = onSnapshot(
+      query(collection(db, 'rounds'), orderBy('roundNumber', 'asc')),
+      snap => {
+        setRounds(snap.docs.map(d => ({ id: d.id, ...d.data() } as Round)))
+        setStatsLoading(false)
+      }
+    )
+  }, [])
+
+  // Cleanup stats listener on unmount
+  useEffect(() => () => { statsUnsubRef.current?.() }, [])
 
   // On auth ready
   useEffect(() => {
     if (auth === undefined) return
     if (!auth) { router.replace('/login'); return }
     if (isCoach) {
-      // Coaches skip votes tab entirely, load stats immediately
+      // Coaches skip votes tab entirely, start stats listener immediately
       setTab('stats')
-      loadStats()
-    } else {
-      loadVotes()
+      startStatsListener()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth])
 
-  // Lazy-load stats when player first opens Stats tab
+  // Lazy-start stats listener when player first opens Stats, Fixtures or Results tab
   useEffect(() => {
-    if (tab === 'stats' && !isCoach) loadStats()
+    if ((tab === 'stats' || tab === 'fixtures' || tab === 'results') && !isCoach) startStatsListener()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
 
@@ -308,38 +548,37 @@ export default function DashboardPage() {
     <div className="min-h-screen flex flex-col">
       <Header />
 
-      {/* Tab bar — coaches only see Stats */}
-      {!isCoach && (
-        <div className="bg-white border-b border-gray-100 px-4 sticky top-0 z-10">
-          <div className="flex max-w-lg mx-auto w-full">
-            {([
-              { id: 'votes', label: 'Votes', icon: Trophy },
-              { id: 'stats', label: 'Stats',  icon: Target },
-            ] as { id: 'votes' | 'stats'; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                onClick={() => setTab(id)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 text-sm font-semibold border-b-2 transition-colors ${
-                  tab === id ? 'border-club-red text-club-red' : 'border-transparent text-gray-500'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {label}
-              </button>
-            ))}
-          </div>
+      {/* Tab bar — coaches only see Stats + Results */}
+      <div className="bg-white border-b border-gray-100 px-4 sticky top-0 z-10">
+        <div className="flex max-w-lg mx-auto w-full">
+          {(isCoach
+            ? [
+                { id: 'stats'    as const, label: 'Stats',    icon: Target        },
+                { id: 'fixtures' as const, label: 'Fixtures', icon: Calendar      },
+                { id: 'results'  as const, label: 'Results',  icon: ClipboardList },
+              ]
+            : [
+                { id: 'votes'    as const, label: 'Votes',    icon: Trophy        },
+                { id: 'stats'    as const, label: 'Stats',    icon: Target        },
+                { id: 'fixtures' as const, label: 'Fixtures', icon: Calendar      },
+                { id: 'results'  as const, label: 'Results',  icon: ClipboardList },
+              ]
+          ).map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-3.5 text-sm font-semibold border-b-2 transition-colors ${
+                tab === id ? 'border-club-red text-club-red' : 'border-transparent text-gray-500'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
       <main className="flex-1 px-4 py-6 max-w-lg mx-auto w-full">
-
-        {/* Greeting */}
-        <div className="mb-5">
-          <h2 className="text-2xl font-black text-gray-900">{auth.name}</h2>
-          <p className="text-gray-500 text-sm mt-0.5">
-            {isCoach ? 'Season overview' : tab === 'votes' ? 'Your pending votes are below' : 'Season stats & results'}
-          </p>
-        </div>
 
         {/* ── VOTES TAB ── */}
         {tab === 'votes' && !isCoach && (
@@ -390,7 +629,7 @@ export default function DashboardPage() {
                         <div>
                           <div className="font-semibold text-gray-700 text-sm">vs {round.opponent}</div>
                           <div className="text-xs text-gray-400 mt-0.5">
-                            {formatDate(round.date)} · Rd {round.roundNumber} · {TEAM_LABEL[team]}
+                            Round {round.roundNumber} · {formatDate(round.date)} · {TEAM_LABEL[team]}
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5">
@@ -412,6 +651,16 @@ export default function DashboardPage() {
         {/* ── STATS TAB ── */}
         {tab === 'stats' && (
           <StatsPanel rounds={rounds} players={players} loading={statsLoading} />
+        )}
+
+        {/* ── FIXTURES TAB ── */}
+        {tab === 'fixtures' && (
+          <FixturesPanel rounds={rounds} loading={statsLoading} />
+        )}
+
+        {/* ── RESULTS TAB ── */}
+        {tab === 'results' && (
+          <ResultsPanel rounds={rounds} loading={statsLoading} />
         )}
 
       </main>

@@ -1,20 +1,27 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { collection, collectionGroup, getDocs, doc, setDoc, updateDoc, deleteDoc, query, orderBy } from 'firebase/firestore'
+import { collection, collectionGroup, getDocs, doc, setDoc, updateDoc, deleteDoc, query, orderBy, onSnapshot, addDoc } from 'firebase/firestore'
 import { db, functions } from '@/lib/firebase'
 import { httpsCallable } from 'firebase/functions'
 import { useAuth } from '@/lib/auth'
-import { Player, Round, Vote, Team, PlayerStat } from '@/lib/types'
+import { Player, Round, Vote, Team, PlayerStat, SupportRequest, SupportMessage } from '@/lib/types'
 import { voteUnlockTime } from '@/lib/voteUnlock'
 import { useRouter } from 'next/navigation'
 import Header from '@/components/Header'
 import Toast from '@/components/Toast'
-import { ChevronDown, Loader2, Plus, Calendar, Users, Trophy, AlertTriangle, UserPlus, Trash2, Target, Pencil, Check, X } from 'lucide-react'
+import { ChevronDown, Loader2, Plus, Calendar, Users, Trophy, AlertTriangle, UserPlus, Trash2, Target, Pencil, Check, X, Zap, MessageSquare, MapPin } from 'lucide-react'
 
-type Tab = 'leaderboard' | 'shame' | 'teamsheet' | 'players' | 'setup' | 'stats'
+type Tab = 'leaderboard' | 'shame' | 'teamsheet' | 'players' | 'setup' | 'stats' | 'support'
 
 const TEAM_LABEL: Record<Team, string> = { reserves: 'Reserves', seniors: 'Seniors' }
+
+/** Derive reserves KO from seniors KO string (HH:MM) — seniors minus 2 hours */
+function deriveReservesKO(seniorsHHMM: string): string {
+  const [h, m] = seniorsHHMM.split(':').map(Number)
+  const rh = ((h - 2) + 24) % 24
+  return `${String(rh).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
 
 interface LeaderboardEntry {
   player: Player
@@ -37,16 +44,20 @@ export default function AdminPage() {
   // Add Round state
   const [newOpponent, setNewOpponent] = useState('')
   const [newDate, setNewDate] = useState('')
-  const [newKickOffTime, setNewKickOffTime] = useState('15:00')
+  const [newKickOffTime, setNewKickOffTime] = useState('19:00')
+  const [newReservesKickOff, setNewReservesKickOff] = useState('17:00')
   const [newVenue, setNewVenue] = useState<'home' | 'away'>('home')
+  const [newLocation, setNewLocation] = useState('Parkmore Soccer Club')
   const [addingRound, setAddingRound] = useState(false)
 
   // Edit Round state
   const [editingRoundId, setEditingRoundId] = useState<string | null>(null)
   const [editOpponent, setEditOpponent] = useState('')
   const [editDate, setEditDate] = useState('')
-  const [editKickOffTime, setEditKickOffTime] = useState('15:00')
+  const [editKickOffTime, setEditKickOffTime] = useState('19:00')
+  const [editReservesKickOff, setEditReservesKickOff] = useState('17:00')
   const [editVenue, setEditVenue] = useState<'home' | 'away'>('home')
+  const [editLocation, setEditLocation] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
 
   // Shame list filters
@@ -65,6 +76,82 @@ export default function AdminPage() {
   })
   const [savingStats, setSavingStats] = useState(false)
 
+  // Noticeboard modal state
+  interface NoticeMsg { id: string; fanName: string; message: string; timestamp: number }
+  const [noticeModal, setNoticeModal]       = useState<{ roundId: string; team: Team; label: string } | null>(null)
+  const [noticeMessages, setNoticeMessages] = useState<NoticeMsg[]>([])
+  const [noticeLoading, setNoticeLoading]   = useState(false)
+
+  const openNoticeboard = async (roundId: string, team: Team, label: string) => {
+    setNoticeModal({ roundId, team, label })
+    setNoticeMessages([])
+    setNoticeLoading(true)
+    try {
+      const snap = await getDocs(query(collection(db, 'rounds', roundId, 'chat'), orderBy('timestamp', 'asc')))
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() } as NoticeMsg & { team?: Team }))
+      setNoticeMessages(all.filter(m => !m.team || m.team === team))
+    } finally { setNoticeLoading(false) }
+  }
+
+  // Support state
+  const [supportRequests,  setSupportRequests]  = useState<SupportRequest[]>([])
+  const [activeSupportId,  setActiveSupportId]  = useState<string | null>(null)
+  const [supportMessages,  setSupportMessages]  = useState<SupportMessage[]>([])
+  const [adminReply,       setAdminReply]       = useState('')
+  const [sendingReply,     setSendingReply]     = useState(false)
+
+  // Derive active chat from live list — status / subject updates instantly without re-opening
+  const supportChat = activeSupportId
+    ? (supportRequests.find(r => r.id === activeSupportId) ?? null)
+    : null
+
+  // Load support requests live (always on, not just when tab === 'support', so badge updates)
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, 'support'), orderBy('lastMessageAt', 'desc')),
+      snap => setSupportRequests(snap.docs.map(d => ({ id: d.id, ...d.data() } as SupportRequest)))
+    )
+    return () => unsub()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Load messages for active support chat
+  useEffect(() => {
+    if (!activeSupportId) return
+    const unsub = onSnapshot(
+      query(collection(db, 'support', activeSupportId, 'messages'), orderBy('timestamp', 'asc')),
+      snap => setSupportMessages(snap.docs.map(d => ({ id: d.id, ...d.data() } as SupportMessage)))
+    )
+    return () => unsub()
+  }, [activeSupportId])
+
+  const openSupportChat = async (r: SupportRequest) => {
+    setActiveSupportId(r.id)
+    // Mark as read — clears the unread dot for this request
+    if (r.lastSenderRole === 'user') {
+      await updateDoc(doc(db, 'support', r.id), { lastSenderRole: 'read' })
+    }
+  }
+
+  const handleAdminReply = async () => {
+    if (!supportChat || !adminReply.trim() || sendingReply) return
+    setSendingReply(true)
+    const text = adminReply.trim(); setAdminReply('')
+    try {
+      const now = Date.now()
+      await addDoc(collection(db, 'support', supportChat.id, 'messages'), {
+        text, sender: 'admin', senderName: 'Admin', timestamp: now,
+      })
+      await updateDoc(doc(db, 'support', supportChat.id), {
+        lastMessage: text, lastMessageAt: now, lastSenderRole: 'admin',
+      })
+    } finally { setSendingReply(false) }
+  }
+
+  const handleResolveRequest = async (requestId: string, current: 'open' | 'resolved') => {
+    await updateDoc(doc(db, 'support', requestId), { status: current === 'open' ? 'resolved' : 'open' })
+  }
+
   // Players state
   const [newPlayerName, setNewPlayerName] = useState('')
   const [newPlayerRole, setNewPlayerRole] = useState<'player' | 'admin' | 'coach'>('player')
@@ -74,6 +161,7 @@ export default function AdminPage() {
   const [selectedRound, setSelectedRound] = useState<Round | null>(null)
   const [reservesSelected, setReservesSelected] = useState<string[]>([])
   const [seniorsSelected, setSeniorsSelected] = useState<string[]>([])
+  const [playerNumbers, setPlayerNumbers] = useState<Record<Team, Record<string, string>>>({ seniors: {}, reserves: {} })
   const [savingTeamsheet, setSavingTeamsheet] = useState(false)
   const [teamsheetSaved, setTeamsheetSaved] = useState(false)
   const [notifyingTeam, setNotifyingTeam] = useState<Team | null>(null)
@@ -122,6 +210,9 @@ export default function AdminPage() {
         roundNumber: nextNumber,
         date: newDate,
         kickOffTime: newKickOffTime,
+        seniorsKickOff: newKickOffTime,
+        reservesKickOff: newReservesKickOff,
+        ...(newLocation.trim() ? { location: newLocation.trim() } : {}),
         opponent: newOpponent.trim(),
         venue: newVenue,
         teamsheets: { reserves: [], seniors: [] },
@@ -130,8 +221,10 @@ export default function AdminPage() {
       setToast({ message: `Round ${nextNumber} vs ${round.opponent} added!`, type: 'success' })
       setNewOpponent('')
       setNewDate('')
-      setNewKickOffTime('14:00')
+      setNewKickOffTime('19:00')
+      setNewReservesKickOff('17:00')
       setNewVenue('home')
+      setNewLocation('Parkmore Soccer Club')
       await loadAll()
     } catch {
       setToast({ message: 'Failed to add round.', type: 'error' })
@@ -156,8 +249,21 @@ export default function AdminPage() {
     setEditingRoundId(round.id)
     setEditOpponent(round.opponent)
     setEditDate(round.date)
-    setEditKickOffTime(round.kickOffTime ?? '15:00')
+    setEditKickOffTime(round.seniorsKickOff ?? round.kickOffTime ?? '19:00')
+    setEditReservesKickOff(round.reservesKickOff ?? deriveReservesKO(round.seniorsKickOff ?? round.kickOffTime ?? '19:00'))
     setEditVenue(round.venue)
+    setEditLocation(round.location ?? (round.venue === 'home' ? 'Parkmore Soccer Club' : ''))
+  }
+
+  const handleToggleLive = async (round: Round) => {
+    try {
+      const next = !round.isLive
+      await updateDoc(doc(db, 'rounds', round.id), { isLive: next })
+      setRounds(prev => prev.map(r => r.id === round.id ? { ...r, isLive: next } : r))
+      setToast({ message: `Round ${round.roundNumber} marked as ${next ? 'Live ⚡' : 'not live'}.`, type: 'success' })
+    } catch {
+      setToast({ message: 'Failed to update live status.', type: 'error' })
+    }
   }
 
   const handleSaveRoundEdit = async () => {
@@ -168,6 +274,9 @@ export default function AdminPage() {
         opponent: editOpponent.trim(),
         date: editDate,
         kickOffTime: editKickOffTime,
+        seniorsKickOff: editKickOffTime,
+        reservesKickOff: editReservesKickOff,
+        location: editLocation.trim() || null,
         venue: editVenue,
       })
       setToast({ message: 'Round updated.', type: 'success' })
@@ -185,6 +294,10 @@ export default function AdminPage() {
     setSelectedRound(round)
     setReservesSelected(round.teamsheets.reserves)
     setSeniorsSelected(round.teamsheets.seniors)
+    setPlayerNumbers({
+      seniors:  round.numbers?.seniors  ?? {},
+      reserves: round.numbers?.reserves ?? {},
+    })
     setTeamsheetSaved(false)
     setNotifyResult({})
   }
@@ -207,7 +320,9 @@ export default function AdminPage() {
     try {
       await updateDoc(doc(db, 'rounds', selectedRound.id), {
         'teamsheets.reserves': reservesSelected,
-        'teamsheets.seniors': seniorsSelected,
+        'teamsheets.seniors':  seniorsSelected,
+        'numbers.reserves':    playerNumbers.reserves,
+        'numbers.seniors':     playerNumbers.seniors,
       })
       setToast({ message: 'Teamsheet saved!', type: 'success' })
       setTeamsheetSaved(true)
@@ -375,13 +490,17 @@ export default function AdminPage() {
     }
   }
 
-  const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+  // 'user' = new unread message; 'read' = opened but not yet replied (no badge)
+  const supportUnread = supportRequests.filter(r => r.lastSenderRole === 'user').length
+
+  const TABS: { id: Tab; label: string; icon: React.ElementType; badge?: number }[] = [
     { id: 'leaderboard', label: 'Leaderboard', icon: Trophy },
-    { id: 'shame', label: 'Shame List', icon: AlertTriangle },
-    { id: 'teamsheet', label: 'Teamsheet', icon: Users },
-    { id: 'stats', label: 'Stats', icon: Target },
-    { id: 'players', label: 'Players', icon: UserPlus },
-    { id: 'setup', label: 'Rounds', icon: Calendar },
+    { id: 'shame',       label: 'Shame List',  icon: AlertTriangle },
+    { id: 'teamsheet',   label: 'Teamsheet',   icon: Users },
+    { id: 'stats',       label: 'Stats',       icon: Target },
+    { id: 'players',     label: 'Players',     icon: UserPlus },
+    { id: 'setup',       label: 'Rounds',      icon: Calendar },
+    { id: 'support',     label: 'Support',     icon: MessageSquare, badge: supportUnread || undefined },
   ]
 
   if (!auth) return null
@@ -389,21 +508,26 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen flex flex-col">
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      <Header title="Admin" />
+      <Header title="Admin" isAdmin />
 
       {/* Tab Bar */}
       <div className="bg-white border-b border-gray-100 px-2 sticky top-0 z-10">
         <div className="flex overflow-x-auto gap-1 max-w-lg mx-auto">
-          {TABS.map(({ id, label, icon: Icon }) => (
+          {TABS.map(({ id, label, icon: Icon, badge }) => (
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={`flex items-center gap-1.5 px-3 py-3.5 text-sm font-semibold whitespace-nowrap border-b-2 transition-colors ${
+              className={`relative flex items-center gap-1.5 px-3 py-3.5 text-sm font-semibold whitespace-nowrap border-b-2 transition-colors ${
                 tab === id ? 'border-club-green text-club-green' : 'border-transparent text-gray-500'
               }`}
             >
               <Icon className="w-4 h-4" />
               {label}
+              {badge ? (
+                <span className="absolute -top-0.5 right-0.5 min-w-[16px] h-4 bg-club-red text-white text-[9px] font-black rounded-full flex items-center justify-center px-0.5 leading-none">
+                  {badge}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -688,23 +812,51 @@ export default function AdminPage() {
                                 {filter === 'added' ? 'No players added yet.' : 'All players have been added.'}
                               </p>
                             ) : (
-                              visiblePlayers.map(player => (
-                                <button
-                                  key={player.id}
-                                  type="button"
-                                  onClick={() => togglePlayer(player.id, team)}
-                                  className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border text-sm font-medium transition-colors ${
-                                    selected.includes(player.id)
-                                      ? 'bg-club-red/10 border-club-red/30 text-club-red'
-                                      : 'bg-white border-gray-100 text-gray-700'
-                                  }`}
-                                >
-                                  <span>{player.name}</span>
-                                  {selected.includes(player.id) && (
-                                    <span className="text-xs bg-club-red text-white px-2 py-0.5 rounded-full">✓</span>
-                                  )}
-                                </button>
-                              ))
+                              visiblePlayers.map(player => {
+                                const isSelected = selected.includes(player.id)
+                                const num = playerNumbers[team]?.[player.id] ?? ''
+                                return (
+                                  <div
+                                    key={player.id}
+                                    className={`flex items-center rounded-xl border text-sm font-medium transition-colors overflow-hidden ${
+                                      isSelected
+                                        ? 'bg-club-red/10 border-club-red/30'
+                                        : 'bg-white border-gray-100'
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => togglePlayer(player.id, team)}
+                                      className="flex-1 flex items-center justify-between px-4 py-3 text-left"
+                                    >
+                                      <span className={isSelected ? 'text-club-red font-semibold' : 'text-gray-700'}>{player.name}</span>
+                                      {isSelected && (
+                                        <span className="text-xs bg-club-red text-white px-2 py-0.5 rounded-full">✓</span>
+                                      )}
+                                    </button>
+                                    {isSelected && (
+                                      <div className="flex items-center border-l border-club-red/20 pr-3">
+                                        <span className="pl-2 text-xs text-club-red/50 font-bold select-none">#</span>
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          placeholder="—"
+                                          value={num}
+                                          onClick={e => e.stopPropagation()}
+                                          onChange={e => {
+                                            const val = e.target.value.replace(/\D/g, '').slice(0, 2)
+                                            setPlayerNumbers(prev => ({
+                                              ...prev,
+                                              [team]: { ...prev[team], [player.id]: val },
+                                            }))
+                                          }}
+                                          className="w-10 bg-transparent text-sm font-bold text-club-red placeholder-club-red/30 focus:outline-none text-center py-3"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })
                             )}
                           </div>
                         </div>
@@ -795,11 +947,19 @@ export default function AdminPage() {
 
                       return (
                         <div key={team} className="mb-7">
-                          <div className="flex items-center gap-2 mb-4">
-                            <div className="w-6 h-6 bg-club-red text-white rounded-full flex items-center justify-center text-xs font-bold">
-                              {team === 'reserves' ? 'R' : 'S'}
+                          <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-2">
+                              <div className="w-6 h-6 bg-club-red text-white rounded-full flex items-center justify-center text-xs font-bold">
+                                {team === 'reserves' ? 'R' : 'S'}
+                              </div>
+                              <span className="font-bold text-gray-800">{TEAM_LABEL[team]}</span>
                             </div>
-                            <span className="font-bold text-gray-800">{TEAM_LABEL[team]}</span>
+                            <button
+                              onClick={() => openNoticeboard(statsRound.id, team, TEAM_LABEL[team])}
+                              className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-club-red transition-colors px-2.5 py-1.5 rounded-lg hover:bg-club-red/5"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" /> Noticeboard
+                            </button>
                           </div>
 
                           {/* Score */}
@@ -989,21 +1149,41 @@ export default function AdminPage() {
                         className="input-field"
                       />
                     </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Seniors KO</label>
+                        <input
+                          type="time"
+                          value={newKickOffTime}
+                          onChange={e => {
+                            setNewKickOffTime(e.target.value)
+                            if (e.target.value) setNewReservesKickOff(deriveReservesKO(e.target.value))
+                          }}
+                          className="input-field"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Reserves KO</label>
+                        <input
+                          type="time"
+                          value={newReservesKickOff}
+                          onChange={e => setNewReservesKickOff(e.target.value)}
+                          className="input-field"
+                        />
+                      </div>
+                    </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Seniors Kick-off Time</label>
-                      <input
-                        type="time"
-                        value={newKickOffTime}
-                        onChange={e => setNewKickOffTime(e.target.value)}
-                        className="input-field"
-                      />
-                      {newKickOffTime && (() => {
-                        const [h, m] = newKickOffTime.split(':').map(Number)
-                        const resHour = String(h - 2).padStart(2, '0')
-                        return (
-                          <p className="text-xs text-gray-400 mt-1.5">Reserves kick-off: {resHour}:{String(m).padStart(2, '0')}</p>
-                        )
-                      })()}
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Ground / Location</label>
+                      <div className="relative">
+                        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          placeholder="e.g. Keysborough Reserve No.1"
+                          value={newLocation}
+                          onChange={e => setNewLocation(e.target.value)}
+                          className="input-field pl-9"
+                        />
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">Venue</label>
@@ -1012,7 +1192,11 @@ export default function AdminPage() {
                           <button
                             key={v}
                             type="button"
-                            onClick={() => setNewVenue(v)}
+                            onClick={() => {
+                              setNewVenue(v)
+                              if (v === 'home') setNewLocation(loc => loc || 'Parkmore Soccer Club')
+                              else setNewLocation(loc => loc === 'Parkmore Soccer Club' ? '' : loc)
+                            }}
                             className={`flex-1 py-3 capitalize transition-colors ${
                               newVenue === v ? 'bg-club-red text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
                             }`}
@@ -1045,10 +1229,6 @@ export default function AdminPage() {
                       const isEditing = editingRoundId === round.id
                       if (isEditing) {
                         // ── Inline editor ──
-                        const resTime = (() => {
-                          const [h, m] = editKickOffTime.split(':').map(Number)
-                          return `${String(h - 2).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-                        })()
                         return (
                           <div key={round.id} className="bg-white rounded-2xl border border-club-red/30 p-4 space-y-3">
                             <div className="flex items-center justify-between mb-1">
@@ -1080,16 +1260,44 @@ export default function AdminPage() {
                               />
                             </div>
 
-                            {/* Kick-off time */}
+                            {/* Kick-off times */}
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-1">Seniors KO</label>
+                                <input
+                                  type="time"
+                                  value={editKickOffTime}
+                                  onChange={e => {
+                                    setEditKickOffTime(e.target.value)
+                                    if (e.target.value) setEditReservesKickOff(deriveReservesKO(e.target.value))
+                                  }}
+                                  className="input-field"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-500 mb-1">Reserves KO</label>
+                                <input
+                                  type="time"
+                                  value={editReservesKickOff}
+                                  onChange={e => setEditReservesKickOff(e.target.value)}
+                                  className="input-field"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Location */}
                             <div>
-                              <label className="block text-xs font-medium text-gray-500 mb-1">Seniors Kick-off Time</label>
-                              <input
-                                type="time"
-                                value={editKickOffTime}
-                                onChange={e => setEditKickOffTime(e.target.value)}
-                                className="input-field"
-                              />
-                              <p className="text-xs text-gray-400 mt-1">Reserves kick-off: {resTime}</p>
+                              <label className="block text-xs font-medium text-gray-500 mb-1">Ground / Location</label>
+                              <div className="relative">
+                                <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                                <input
+                                  type="text"
+                                  placeholder="e.g. Keysborough Reserve No.1"
+                                  value={editLocation}
+                                  onChange={e => setEditLocation(e.target.value)}
+                                  className="input-field pl-9"
+                                />
+                              </div>
                             </div>
 
                             {/* Venue */}
@@ -1100,7 +1308,11 @@ export default function AdminPage() {
                                   <button
                                     key={v}
                                     type="button"
-                                    onClick={() => setEditVenue(v)}
+                                    onClick={() => {
+                                      setEditVenue(v)
+                                      if (v === 'home') setEditLocation(loc => loc || 'Parkmore Soccer Club')
+                                      else setEditLocation(loc => loc === 'Parkmore Soccer Club' ? '' : loc)
+                                    }}
                                     className={`flex-1 py-2.5 capitalize transition-colors ${
                                       editVenue === v ? 'bg-club-red text-white' : 'bg-white text-gray-500 hover:bg-gray-50'
                                     }`}
@@ -1137,7 +1349,7 @@ export default function AdminPage() {
                       return (
                         <div key={round.id} className="bg-white rounded-xl border border-gray-100 px-4 py-3 flex items-center justify-between">
                           <div>
-                            <div className="font-semibold text-gray-900 flex items-center gap-2">
+                            <div className="font-semibold text-gray-900 flex items-center gap-2 flex-wrap">
                               Rd {round.roundNumber} · vs {round.opponent}
                               {round.venue && (
                                 <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
@@ -1146,12 +1358,26 @@ export default function AdminPage() {
                                   {round.venue === 'home' ? 'Home' : 'Away'}
                                 </span>
                               )}
+                              {round.isLive && (
+                                <span className="text-xs font-bold text-club-red bg-club-red/10 px-2 py-0.5 rounded-full uppercase tracking-wide flex items-center gap-0.5 animate-pulse">
+                                  <Zap className="w-3 h-3" /> Live
+                                </span>
+                              )}
                             </div>
                             <div className="text-xs text-gray-400 mt-0.5">
                               {new Date(round.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
-                              {round.kickOffTime ? ` · Sen ${round.kickOffTime} / Res ${(() => { const [h,m] = round.kickOffTime.split(':').map(Number); return `${String(h-2).padStart(2,'0')}:${String(m).padStart(2,'0')}` })()}` : ''}
+                              {(() => {
+                                const sen = round.seniorsKickOff ?? round.kickOffTime
+                                const res = round.reservesKickOff ?? (sen ? deriveReservesKO(sen) : null)
+                                return sen ? ` · Sen ${sen}${res ? ` / Res ${res}` : ''}` : ''
+                              })()}
                               <span className="ml-2">· {round.teamsheets.reserves.length}R / {round.teamsheets.seniors.length}S</span>
                             </div>
+                            {round.location && (
+                              <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
+                                <MapPin className="w-3 h-3 shrink-0" />{round.location}
+                              </div>
+                            )}
                             {(round.results?.reserves || round.results?.seniors) && (
                               <div className="flex gap-2 mt-1">
                                 {round.results.reserves && (
@@ -1168,6 +1394,13 @@ export default function AdminPage() {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0 ml-3">
+                            <button
+                              onClick={() => handleToggleLive(round)}
+                              title={round.isLive ? 'Mark as not live' : 'Mark as live'}
+                              className={`p-2 transition-colors ${round.isLive ? 'text-club-red' : 'text-gray-300 hover:text-club-red'}`}
+                            >
+                              <Zap className="w-4 h-4" />
+                            </button>
                             <button
                               onClick={() => startEditRound(round)}
                               className="p-2 text-gray-300 hover:text-club-red transition-colors"
@@ -1186,9 +1419,176 @@ export default function AdminPage() {
 
               </div>
             )}
+            {/* ── SUPPORT TAB ── */}
+            {tab === 'support' && (
+              <div>
+                {supportChat ? (
+                  /* ── Chat view ── */
+                  <div className="flex flex-col h-full">
+                    <div className="flex items-center gap-3 mb-4">
+                      <button onClick={() => { setActiveSupportId(null); setSupportMessages([]) }}
+                        className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center shrink-0 transition-colors"
+                      >
+                        <MessageSquare className="w-4 h-4 text-gray-600 rotate-180" />
+                      </button>
+                      <div className="min-w-0">
+                        <div className="font-black text-gray-900 truncate">{supportChat.subject}</div>
+                        <div className="text-xs text-gray-400 mt-0.5">
+                          {supportChat.fanName} · {supportChat.fromApp === 'fans' ? 'Fan Zone' : 'MOTM'} ·{' '}
+                          <span className={supportChat.status === 'open' ? 'text-green-600 font-semibold' : 'text-gray-400'}>
+                            {supportChat.status === 'open' ? 'Open' : 'Resolved'}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleResolveRequest(supportChat.id, supportChat.status)}
+                        className={`ml-auto shrink-0 text-xs font-bold px-3 py-1.5 rounded-xl border transition-colors ${
+                          supportChat.status === 'open'
+                            ? 'border-green-200 text-green-700 hover:bg-green-50'
+                            : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                        }`}
+                      >
+                        {supportChat.status === 'open' ? 'Mark Resolved' : 'Re-open'}
+                      </button>
+                    </div>
+
+                    {/* Messages */}
+                    <div className="space-y-2 mb-4 min-h-[200px]">
+                      {supportMessages.map(m => {
+                        const isAdmin = m.sender === 'admin'
+                        return (
+                          <div key={m.id} className={`flex gap-2 items-end ${isAdmin ? 'flex-row-reverse' : ''}`}>
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0 ${
+                              isAdmin ? 'bg-club-green text-white' : 'bg-club-red/10 text-club-red'
+                            }`}>
+                              {isAdmin ? 'A' : supportChat.fanName[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <p className={`text-[10px] font-bold mb-0.5 ${isAdmin ? 'text-right text-club-green' : 'text-gray-500'}`}>
+                                {isAdmin ? 'You (Admin)' : supportChat.fanName}
+                              </p>
+                              <div className={`px-3 py-2 rounded-2xl text-sm break-words max-w-xs ${
+                                isAdmin
+                                  ? 'bg-club-green text-white rounded-br-none'
+                                  : 'bg-gray-100 text-gray-800 rounded-bl-none'
+                              }`}>
+                                {m.text}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {/* Reply input */}
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Reply as admin..."
+                        value={adminReply}
+                        onChange={e => setAdminReply(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAdminReply() } }}
+                        className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-club-green/30 bg-gray-50"
+                      />
+                      <button
+                        onClick={handleAdminReply}
+                        disabled={!adminReply.trim() || sendingReply}
+                        className="w-10 h-10 bg-club-green rounded-xl flex items-center justify-center shrink-0 disabled:opacity-40 hover:bg-club-green/90 transition-colors"
+                      >
+                        {sendingReply ? <Loader2 className="w-4 h-4 text-white animate-spin" /> : <MessageSquare className="w-4 h-4 text-white" />}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* ── Request list ── */
+                  <div>
+                    <h2 className="text-xl font-black text-gray-900 mb-1">Support &amp; Feature Requests</h2>
+                    <p className="text-gray-500 text-sm mb-5">Messages from players and fans</p>
+                    {supportRequests.length === 0 ? (
+                      <div className="bg-gray-50 rounded-2xl border border-gray-100 px-4 py-10 text-center text-sm text-gray-400">
+                        No support requests yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {supportRequests.map(r => {
+                          const isUnread = r.lastSenderRole === 'user'
+                          return (
+                            <button key={r.id} onClick={() => openSupportChat(r)}
+                              className={`w-full text-left border rounded-2xl px-4 py-3.5 transition-colors ${
+                                isUnread
+                                  ? 'bg-club-red/5 border-club-red/20 hover:bg-club-red/10'
+                                  : 'bg-white border-gray-100 hover:border-gray-200'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  {isUnread && <span className="w-2 h-2 rounded-full bg-club-red shrink-0" />}
+                                  <span className="font-semibold text-gray-800 text-sm truncate">{r.subject}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">
+                                    {r.fromApp === 'fans' ? 'Fan' : 'Player'}
+                                  </span>
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                    r.status === 'open' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'
+                                  }`}>
+                                    {r.status === 'open' ? 'Open' : 'Resolved'}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between mt-1">
+                                <span className="text-xs text-gray-400">{r.fanName}</span>
+                                {r.lastMessage && (
+                                  <span className="text-xs text-gray-400 truncate max-w-[180px]">{r.lastMessage}</span>
+                                )}
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
           </>
         )}
       </main>
+
+      {/* ── Noticeboard modal ── */}
+      {noticeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setNoticeModal(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-gray-100">
+              <div>
+                <div className="font-black text-gray-900">{noticeModal.label} Noticeboard</div>
+                <div className="text-xs text-gray-400 mt-0.5">Fan Messages for this match</div>
+              </div>
+              <button onClick={() => setNoticeModal(null)} className="p-2 text-gray-400 hover:text-gray-600 rounded-xl hover:bg-gray-100 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {/* Messages */}
+            <div className="overflow-y-auto flex-1 px-5 py-4 space-y-3">
+              {noticeLoading ? (
+                <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-club-red" /></div>
+              ) : noticeMessages.length === 0 ? (
+                <p className="text-center text-gray-400 text-sm py-8">No messages posted yet.</p>
+              ) : noticeMessages.map(m => (
+                <div key={m.id} className="bg-gray-50 rounded-xl px-4 py-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold text-club-red">{m.fanName}</span>
+                    <span className="text-[10px] text-gray-400">{new Date(m.timestamp).toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: true })}</span>
+                  </div>
+                  <p className="text-sm text-gray-700">{m.message}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
