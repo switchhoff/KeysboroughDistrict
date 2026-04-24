@@ -5,12 +5,18 @@ functions/node_modules/
 # Next.js build output
 .next/
 out/
+out-fans/
+**/out/
+**/.next/
 
 # Firebase
 .firebase/
-firebase-debug.log
-firestore-debug.log
-ui-debug.log
+*-debug.log
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+functions/lib/
+functions/dist/
 
 # Environment & secrets
 .env
@@ -18,7 +24,11 @@ ui-debug.log
 .env.development.local
 .env.test.local
 .env.production.local
+**/.env*.local
 *.pem
+
+# AI/Editor local settings
+.claude/
 
 # OS
 .DS_Store
