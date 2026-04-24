@@ -28,6 +28,39 @@ function deriveReservesKO(seniorsHHMM: string): string {
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 
+function Countdown({ targetDate }: { targetDate: Date }) {
+  const [timeLeft, setTimeLeft] = useState<string>('')
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date().getTime()
+      const distance = targetDate.getTime() - now
+
+      if (distance < 0) {
+        setTimeLeft('')
+        clearInterval(timer)
+        return
+      }
+
+      const h = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+      const m = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60))
+      const s = Math.floor((distance % (1000 * 60)) / 1000)
+
+      setTimeLeft(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`)
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [targetDate])
+
+  if (!timeLeft) return null
+
+  return (
+    <div className="absolute -top-2.5 -left-2 bg-club-red text-white text-[9px] font-black px-2 py-1 rounded-lg shadow-md animate-pulse z-10 border-2 border-white uppercase tracking-wider">
+      Seniors starts in {timeLeft}
+    </div>
+  )
+}
+
 type RoundTab = 'upcoming' | 'completed' | 'stats'
 type StatFilter = 'all' | 'goals' | 'assists'
 
@@ -187,11 +220,16 @@ export default function FanRoundsPage() {
     </div>
   )
 
-  const RoundCard = ({ round, isLive }: { round: Round; isLive?: boolean }) => (
-    <Link href={`/round?roundId=${round.id}`}>
-      <div className={`bg-white border rounded-2xl px-4 py-4 hover:shadow-sm transition-all group ${
-        isLive ? 'border-club-red/30 shadow-sm' : 'border-gray-100 hover:border-club-red/30'
-      }`}>
+  const RoundCard = ({ round, isLive, showCountdown }: { round: Round; isLive?: boolean; showCountdown?: boolean }) => {
+    const senKO = round.seniorsKickOff ?? round.kickOffTime
+    const kickoffDate = (showCountdown && senKO) ? new Date(`${round.date}T${senKO}`) : null
+
+    return (
+      <Link href={`/round?roundId=${round.id}`} className="relative block group">
+        {kickoffDate && <Countdown targetDate={kickoffDate} />}
+        <div className={`bg-white border rounded-2xl px-4 py-4 hover:shadow-sm transition-all ${
+          isLive ? 'border-club-red/30 shadow-sm' : 'border-gray-100 hover:border-club-red/30'
+        }`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             {isLive ? (
@@ -254,9 +292,10 @@ export default function FanRoundsPage() {
           </div>
           <ChevronRight className="w-6 h-6 text-gray-400 group-hover:text-club-red transition-colors shrink-0" />
         </div>
-      </div>
-    </Link>
-  )
+        </div>
+      </Link>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -338,7 +377,7 @@ export default function FanRoundsPage() {
           {tab === 'upcoming' && (
             upcomingRounds.length === 0
               ? <p className="text-center text-gray-400 text-sm py-10">No fixtures scheduled.</p>
-              : upcomingRounds.map(r => <RoundCard key={r.id} round={r} />)
+              : upcomingRounds.map((r, i) => <RoundCard key={r.id} round={r} showCountdown={i === 0} />)
           )}
           {tab === 'completed' && (
             completedRounds.length === 0
