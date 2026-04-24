@@ -63,18 +63,18 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
 
   useEffect(() => {
     setPushState(getPushState())
-    if (fanAuth) {
-      setSettingsLoading(true)
-      getDoc(doc(db, 'fans', fanAuth.fanId)).then(snap => {
-        if (snap.exists()) {
-          const data = snap.data()
-          if (data.notificationSettings) {
-            setNotifSettings(data.notificationSettings)
-          }
+    if (!fanAuth) return
+    setSettingsLoading(true)
+    const unsub = onSnapshot(doc(db, 'fans', fanAuth.fanId), snap => {
+      if (snap.exists()) {
+        const data = snap.data()
+        if (data.notificationSettings) {
+          setNotifSettings(data.notificationSettings)
         }
-        setSettingsLoading(false)
-      })
-    }
+      }
+      setSettingsLoading(false)
+    })
+    return () => unsub()
   }, [fanAuth])
 
   const msgEndRef = useRef<HTMLDivElement>(null)
@@ -162,10 +162,14 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
   }, [fanAuth, oldPin, newPin, confirmPin])
   const updateNotifSetting = async (key: keyof NotificationSettings, val: boolean) => {
     if (!fanAuth) return
-    const newSettings = { ...notifSettings, [key]: val }
-    setNotifSettings(newSettings)
-    await updateDoc(doc(db, 'fans', fanAuth.fanId), {
-      notificationSettings: newSettings
+    setNotifSettings(prev => {
+      const next = { ...prev, [key]: val }
+      updateDoc(doc(db, 'fans', fanAuth.fanId), {
+        notificationSettings: next
+      }).catch(err => {
+        console.error('Failed to update settings:', err)
+      })
+      return next
     })
   }
 
