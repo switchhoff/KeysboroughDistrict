@@ -13,7 +13,7 @@ import SettingsModal from './SettingsModal'
 interface GoalEvent {
   id: string
   team: Team
-  type?: 'goal' | 'whistle' | 'halftime'
+  type?: 'goal' | 'kickoff' | 'halftime' | 'second_half' | 'whistle'
   scoredBy?: 'kdfc' | 'opponent'
   timestamp: number
 }
@@ -68,19 +68,23 @@ export default function FanHeader({ fanName }: FanHeaderProps) {
       opp:  evts.filter(g => g.scoredBy === 'opponent').length,
     }
   }
-  const teamStatus = (team: Team): 'ft' | 'ht' | 'live' => {
+  const teamStatus = (team: Team): 'pre' | 'ft' | 'ht' | '2h' | '1h' => {
     const evts = liveGoals.filter(g => g.team === team)
-    if (evts.some(e => e.type === 'whistle'))  return 'ft'
-    if (evts.some(e => e.type === 'halftime')) return 'ht'
-    return 'live'
+    if (evts.some(e => e.type === 'whistle'))     return 'ft'
+    if (evts.some(e => e.type === 'second_half')) return '2h'
+    if (evts.some(e => e.type === 'halftime'))    return 'ht'
+    if (evts.some(e => e.type === 'kickoff') || evts.some(e => !e.type)) return '1h'
+    return 'pre'
   }
 
-  const statusLabel = (s: 'ft' | 'ht' | 'live') =>
-    s === 'ft' ? 'FT' : s === 'ht' ? 'HT' : '●'
-  const statusCls = (s: 'ft' | 'ht' | 'live') =>
-    s === 'ft'   ? 'text-white/50' :
-    s === 'ht'   ? 'text-amber-300' :
-    /* live */     'text-green-300 animate-pulse'
+  const statusLabel = (s: 'pre' | 'ft' | 'ht' | '2h' | '1h') =>
+    s === 'ft' ? 'FT' : s === 'ht' ? 'HT' : s === '2h' ? '2nd' : s === '1h' ? '1st' : '●'
+  const statusCls = (s: 'pre' | 'ft' | 'ht' | '2h' | '1h') =>
+    s === 'ft'  ? 'text-white/50' :
+    s === 'ht'  ? 'text-amber-300' :
+    s === '2h'  ? 'text-blue-300 animate-pulse' :
+    s === '1h'  ? 'text-green-300 animate-pulse' :
+    /* pre */     'text-green-400 animate-pulse'
 
   const hasLive = liveRoundId !== null
   const snr = teamScore('seniors');  const snrSt = teamStatus('seniors')
@@ -110,7 +114,7 @@ export default function FanHeader({ fanName }: FanHeaderProps) {
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-wide w-6">Snr</span>
                 <span className="text-sm font-black tabular-nums">{snr.kdfc}–{snr.opp}</span>
-                <span className={`text-[10px] font-black w-4 text-right ${statusCls(snrSt)}`}>
+                <span className={`text-[10px] font-black w-6 text-right ${statusCls(snrSt)}`}>
                   {statusLabel(snrSt)}
                 </span>
               </div>
@@ -118,7 +122,7 @@ export default function FanHeader({ fanName }: FanHeaderProps) {
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] font-bold text-white/60 uppercase tracking-wide w-6">Res</span>
                 <span className="text-sm font-black tabular-nums">{res.kdfc}–{res.opp}</span>
-                <span className={`text-[10px] font-black w-4 text-right ${statusCls(resSt)}`}>
+                <span className={`text-[10px] font-black w-6 text-right ${statusCls(resSt)}`}>
                   {statusLabel(resSt)}
                 </span>
               </div>

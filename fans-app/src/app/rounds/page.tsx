@@ -1,15 +1,16 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore'
+import { collection, getDocs, onSnapshot, orderBy, query } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { Round } from '@/lib/types'
+import { Round, Player, Team } from '@/lib/types'
 import { getStoredFanAuth } from '@/lib/fanAuth'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
 import FanHeader from '@/components/FanHeader'
-import { Loader2, Calendar, ChevronRight, CheckCircle, Zap, MapPin } from 'lucide-react'
+import { Loader2, Calendar, ChevronRight, CheckCircle, Zap, MapPin, Target, BarChart2, Bell, BellOff, X } from 'lucide-react'
+import { getPushState, subscribeToPush } from '@/lib/pushNotifications'
 
 // ── Kick-off time helpers ─────────────────────────────────────────────────
 function fmtTime(hhmm: string): string {
@@ -27,19 +28,133 @@ function deriveReservesKO(seniorsHHMM: string): string {
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 
-type RoundTab = 'upcoming' | 'completed'
+type RoundTab = 'upcoming' | 'completed' | 'stats'
+type StatFilter = 'all' | 'goals' | 'assists'
+
+const TEAM_LABEL: Record<Team, string> = { reserves: 'Reserves', seniors: 'Seniors' }
+
+const rankBg = (i: number) =>
+  i === 0 ? 'bg-amber-100 text-amber-600' :
+  i === 1 ? 'bg-gray-100 text-gray-600' :
+  i === 2 ? 'bg-orange-100 text-orange-600' :
+  'bg-gray-50 text-gray-400'
+
+function StatsPanel({ rounds, players, loading }: { rounds: Round[]; players: Player[]; loading: boolean }) {
+  const [team, setTeam] = useState<Team>('seniors')
+  const [filter, setFilter] = useState<StatFilter>('all')
+
+  const board = (() => {
+    const totals: Record<string, { goals: number; assists: number }> = {}
+    for (const round of rounds) {
+      for (const [playerId, s] of Object.entries(round.stats?.[team] ?? {})) {
+        if (!totals[playerId]) totals[playerId] = { goals: 0, assists: 0 }
+        totals[playerId].goals += s.goals
+        totals[playerId].assists += s.assists
+      }
+    }
+    const entries = players
+      .filter(p => p.role !== 'coach')
+      .map(p => ({
+        player: p,
+        goals: totals[p.id]?.goals ?? 0,
+        assists: totals[p.id]?.assists ?? 0,
+      }))
+
+    if (filter === 'goals')
+      return entries.filter(e => e.goals > 0).sort((a, b) => b.goals - a.goals)
+    if (filter === 'assists')
+      return entries.filter(e => e.assists > 0).sort((a, b) => b.assists - a.assists)
+    return entries
+      .filter(e => e.goals > 0 || e.assists > 0)
+      .sort((a, b) => b.goals - a.goals || b.assists - a.assists)
+  })()
+
+  if (loading) return (
+    <div className="flex items-center justify-center py-20">
+      <Loader2 className="w-8 h-8 animate-spin text-club-red" />
+    </div>
+  )
+
+  return (
+    <div className="space-y-6">
+      <div className="flex rounded-xl overflow-hidden border border-gray-200 text-sm font-semibold">
+        {(['seniors', 'reserves'] as Team[]).map(t => (
+          <button key={t} type="button" onClick={() => setTeam(t)}
+            className={`flex-1 py-2.5 transition-colors ${team === t ? 'bg-club-red text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
+            {TEAM_LABEL[t]}
+          </button>
+        ))}
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <Target className="w-4 h-4 text-club-green" />
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            {filter === 'all' ? 'Goals & Assists' : filter === 'goals' ? 'Goals' : 'Assists'} — {TEAM_LABEL[team]}
+          </span>
+        </div>
+
+        <div className="flex rounded-xl overflow-hidden border border-gray-200 text-xs font-semibold mb-3">
+          {([
+            { id: 'all',     label: 'All Contributions' },
+            { id: 'goals',   label: 'Goals Only' },
+            { id: 'assists', label: 'Assists Only' },
+          ] as { id: StatFilter; label: string }[]).map(({ id, label }) => (
+            <button key={id} type="button" onClick={() => setFilter(id)}
+              className={`flex-1 py-2 transition-colors ${filter === id ? 'bg-club-green text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {board.length === 0 ? (
+          <div className="bg-gray-50 rounded-2xl border border-gray-100 px-4 py-6 text-center text-sm text-gray-400">
+            No {filter === 'assists' ? 'assists' : filter === 'goals' ? 'goals' : 'stats'} recorded yet for {TEAM_LABEL[team]}.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className={`grid gap-3 px-4 pb-1 ${filter === 'all' ? 'grid-cols-[2.25rem_1fr_3.5rem_3.5rem]' : 'grid-cols-[2.25rem_1fr_3.5rem]'}`}>
+              <div />
+              <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Player</div>
+              {filter !== 'assists' && <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-center">Goals</div>}
+              {filter !== 'goals'   && <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-center">{filter === 'all' ? 'Asts' : 'Assists'}</div>}
+            </div>
+            {board.map((entry, i) => (
+              <div key={entry.player.id}
+                className={`bg-white rounded-2xl border border-gray-100 p-4 grid gap-3 items-center ${filter === 'all' ? 'grid-cols-[2.25rem_1fr_3.5rem_3.5rem]' : 'grid-cols-[2.25rem_1fr_3.5rem]'}`}>
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-sm shrink-0 ${rankBg(i)}`}>{i + 1}</div>
+                <div className="font-bold text-gray-900 truncate">{entry.player.name}</div>
+                {filter !== 'assists' && <div className="text-xl font-black text-club-red text-center">{entry.goals}</div>}
+                {filter !== 'goals'   && <div className="text-xl font-black text-club-green text-center">{entry.assists}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export default function FanRoundsPage() {
   const router = useRouter()
   const [rounds, setRounds] = useState<Round[]>([])
+  const [players, setPlayers] = useState<Player[]>([])
   const [loading, setLoading] = useState(true)
+  const [statsLoading, setStatsLoading] = useState(false)
   const [fanName, setFanName] = useState('')
   const [tab, setTab] = useState<RoundTab>('upcoming')
+  const [showNotifBanner, setShowNotifBanner] = useState(false)
+  const [notifLoading,    setNotifLoading]    = useState(false)
+  const [fanId,           setFanId]           = useState('')
 
   useEffect(() => {
     const auth = getStoredFanAuth()
     if (!auth) { router.replace('/'); return }
     setFanName(auth.fanName)
+    setFanId(auth.fanId)
+    // Show banner if permission not yet decided and not previously dismissed
+    const dismissed = localStorage.getItem('kpp_fans_notif_dismissed')
+    if (!dismissed && getPushState() === 'default') setShowNotifBanner(true)
 
     const unsub = onSnapshot(
       query(collection(db, 'rounds'), orderBy('roundNumber', 'desc')),
@@ -51,6 +166,16 @@ export default function FanRoundsPage() {
     return () => unsub()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Load players when stats tab is first opened
+  useEffect(() => {
+    if (tab !== 'stats' || players.length > 0) return
+    setStatsLoading(true)
+    getDocs(collection(db, 'players')).then(snap => {
+      setPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() } as Player)))
+      setStatsLoading(false)
+    })
+  }, [tab, players.length])
 
   const liveRounds      = rounds.filter(r => r.isLive)
   const upcomingRounds  = rounds.filter(r => !r.isLive && new Date(r.date) >= new Date(new Date().toDateString())).reverse()
@@ -137,6 +262,42 @@ export default function FanRoundsPage() {
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <FanHeader fanName={fanName} />
 
+      {/* Goal notification banner */}
+      {showNotifBanner && (
+        <div className="bg-club-red/5 border-b border-club-red/10 px-4 py-3">
+          <div className="max-w-lg mx-auto flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-club-red/10 flex items-center justify-center shrink-0">
+              <Bell className="w-4 h-4 text-club-red" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-gray-900">Get goal alerts</p>
+              <p className="text-xs text-gray-500">We'll notify you the moment KDFC score</p>
+            </div>
+            <button
+              onClick={async () => {
+                setNotifLoading(true)
+                const ok = await subscribeToPush(fanId)
+                setNotifLoading(false)
+                if (ok || getPushState() !== 'default') {
+                  setShowNotifBanner(false)
+                  localStorage.setItem('kpp_fans_notif_dismissed', '1')
+                }
+              }}
+              disabled={notifLoading}
+              className="shrink-0 flex items-center gap-1.5 bg-club-red text-white text-xs font-bold px-3 py-1.5 rounded-full disabled:opacity-50 transition-opacity"
+            >
+              {notifLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Enable'}
+            </button>
+            <button
+              onClick={() => { setShowNotifBanner(false); localStorage.setItem('kpp_fans_notif_dismissed', '1') }}
+              className="shrink-0 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 max-w-lg mx-auto w-full">
 
         {/* ── Current / Live rounds ── */}
@@ -157,6 +318,7 @@ export default function FanRoundsPage() {
             {([
               { id: 'upcoming'  as RoundTab, label: `Fixtures${upcomingRounds.length   ? ` (${upcomingRounds.length})`   : ''}`, icon: Calendar      },
               { id: 'completed' as RoundTab, label: `Results${completedRounds.length ? ` (${completedRounds.length})` : ''}`, icon: CheckCircle },
+              { id: 'stats'     as RoundTab, label: 'Stats',                                                                     icon: BarChart2     },
             ] as const).map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
@@ -182,6 +344,9 @@ export default function FanRoundsPage() {
             completedRounds.length === 0
               ? <p className="text-center text-gray-400 text-sm py-10">No results yet.</p>
               : completedRounds.map(r => <RoundCard key={r.id} round={r} />)
+          )}
+          {tab === 'stats' && (
+            <StatsPanel rounds={rounds} players={players} loading={statsLoading} />
           )}
         </div>
       </main>

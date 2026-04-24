@@ -10,9 +10,10 @@ import { voteUnlockTime } from '@/lib/voteUnlock'
 import { useRouter } from 'next/navigation'
 import Header from '@/components/Header'
 import Toast from '@/components/Toast'
-import { ChevronDown, Loader2, Plus, Calendar, Users, Trophy, AlertTriangle, UserPlus, Trash2, Target, Pencil, Check, X, Zap, MessageSquare, MapPin } from 'lucide-react'
+import { ChevronDown, Loader2, Plus, Calendar, Users, Trophy, AlertTriangle, UserPlus, Trash2, Target, Pencil, Check, X, Zap, MessageSquare, MapPin, QrCode, ExternalLink } from 'lucide-react'
+import { QRCodeSVG } from 'qrcode.react'
 
-type Tab = 'leaderboard' | 'shame' | 'teamsheet' | 'players' | 'setup' | 'stats' | 'support'
+type Tab = 'leaderboard' | 'shame' | 'teamsheet' | 'players' | 'setup' | 'stats' | 'support' | 'fanzone'
 
 const TEAM_LABEL: Record<Team, string> = { reserves: 'Reserves', seniors: 'Seniors' }
 
@@ -501,6 +502,7 @@ export default function AdminPage() {
     { id: 'players',     label: 'Players',     icon: UserPlus },
     { id: 'setup',       label: 'Rounds',      icon: Calendar },
     { id: 'support',     label: 'Support',     icon: MessageSquare, badge: supportUnread || undefined },
+    { id: 'fanzone',     label: 'Fan Zone',    icon: QrCode },
   ]
 
   if (!auth) return null
@@ -1557,6 +1559,60 @@ export default function AdminPage() {
       </main>
 
       {/* ── Noticeboard modal ── */}
+            {/* ── FAN ZONE TAB ── */}
+            {tab === 'fanzone' && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="font-black text-gray-900 text-base">Fan Zone QR Code</h2>
+                  <p className="text-sm text-gray-400 mt-0.5">Share this code so fans can sign up and join the live experience.</p>
+                </div>
+
+                {/* QR card */}
+                <div className="bg-white border border-gray-100 rounded-2xl p-6 flex flex-col items-center gap-4 shadow-sm">
+                  <div className="p-3 bg-white rounded-xl border-2 border-club-red/10">
+                    <QRCodeSVG
+                      value="https://keysborough-district-fans.web.app"
+                      size={200}
+                      fgColor="#c01e1e"
+                      bgColor="#ffffff"
+                      level="M"
+                    />
+                  </div>
+                  <div className="text-center space-y-1">
+                    <p className="font-bold text-gray-900 text-sm">Keysborough District Fan Zone</p>
+                    <p className="text-xs text-gray-400">keysborough-district-fans.web.app</p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <a
+                      href="https://keysborough-district-fans.web.app"
+                      target="_blank" rel="noopener noreferrer"
+                      className="flex-1 flex items-center justify-center gap-1.5 text-sm font-semibold text-club-red bg-club-red/5 hover:bg-club-red/10 border border-club-red/20 rounded-xl py-2.5 transition-colors"
+                    >
+                      <ExternalLink className="w-4 h-4" /> Open App
+                    </a>
+                    <a
+                      href="/fan-guide"
+                      target="_blank" rel="noopener noreferrer"
+                      className="flex-1 flex items-center justify-center gap-1.5 text-sm font-semibold text-gray-600 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl py-2.5 transition-colors"
+                    >
+                      <ExternalLink className="w-4 h-4" /> Printable Guide
+                    </a>
+                  </div>
+                </div>
+
+                {/* Instructions card */}
+                <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 space-y-2">
+                  <p className="text-xs font-bold text-amber-700 uppercase tracking-wide">How to use</p>
+                  <ul className="text-sm text-amber-800 space-y-1.5 list-none">
+                    <li>1. Display or print this QR code at the ground</li>
+                    <li>2. Fans scan it and sign up with their name + PIN</li>
+                    <li>3. They can follow the live feed, vote MOTM, and post messages</li>
+                    <li>4. The <strong>Printable Guide</strong> link above has step-by-step fan instructions you can screenshot or print</li>
+                  </ul>
+                </div>
+              </div>
+            )}
+
       {noticeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setNoticeModal(null)}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>

@@ -6,6 +6,7 @@ export interface Player {
   pin: string
   role: 'admin' | 'player' | 'coach'
   pushSubscription?: object // Web Push PushSubscription JSON
+  photoUrl?: string
 }
 
 export interface RoundResult {

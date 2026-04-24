@@ -4,8 +4,9 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   X, ChevronRight, ChevronLeft, Send, Loader2,
-  Eye, EyeOff, MessageSquare, Plus,
+  Eye, EyeOff, MessageSquare, Plus, Bell, BellOff,
 } from 'lucide-react'
+import { getPushState, subscribeToPush, unsubscribeFromPush, type PushState } from '@/lib/pushNotifications'
 import {
   collection, addDoc, onSnapshot, query,
   where, orderBy, updateDoc, doc, getDoc,
@@ -47,8 +48,12 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
   const [confirmPin, setConfirmPin] = useState('')
   const [showPin,    setShowPin]    = useState(false)
   const [pinError,   setPinError]   = useState('')
-  const [pinSaving,  setPinSaving]  = useState(false)
-  const [pinSuccess, setPinSuccess] = useState(false)
+  const [pinSaving,    setPinSaving]    = useState(false)
+  const [pinSuccess,   setPinSuccess]   = useState(false)
+  const [pushState,    setPushState]    = useState<PushState>('unsupported')
+  const [pushLoading,  setPushLoading]  = useState(false)
+
+  useEffect(() => { setPushState(getPushState()) }, [])
 
   const msgEndRef = useRef<HTMLDivElement>(null)
 
@@ -229,6 +234,51 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
                 <span className="font-semibold text-gray-800 text-sm">Change PIN</span>
                 <ChevronRight className="w-4 h-4 text-gray-400" />
               </button>
+              {/* Notifications toggle */}
+              {pushState !== 'unsupported' && (
+                <div className="w-full flex items-center justify-between bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3.5">
+                  <div className="flex items-center gap-2.5">
+                    {pushState === 'granted'
+                      ? <Bell className="w-4 h-4 text-club-red shrink-0" />
+                      : <BellOff className="w-4 h-4 text-gray-400 shrink-0" />
+                    }
+                    <div>
+                      <span className="font-semibold text-gray-800 text-sm block">Match Notifications</span>
+                      <span className="text-xs text-gray-400">
+                        {pushState === 'granted' ? 'On — goals, kick off, half time & full time' :
+                         pushState === 'denied'  ? 'Blocked — enable in browser settings' :
+                                                   'Off — tap for live match alerts'}
+                      </span>
+                    </div>
+                  </div>
+                  {pushState !== 'denied' && (
+                    <button
+                      disabled={pushLoading}
+                      onClick={async () => {
+                        if (!fanAuth) return
+                        setPushLoading(true)
+                        try {
+                          if (pushState === 'granted') {
+                            await unsubscribeFromPush(fanAuth.fanId)
+                            setPushState('default')
+                          } else {
+                            const ok = await subscribeToPush(fanAuth.fanId)
+                            if (ok) setPushState('granted')
+                            else setPushState(getPushState())
+                          }
+                        } finally { setPushLoading(false) }
+                      }}
+                      className={`relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50 ${pushState === 'granted' ? 'bg-club-red' : 'bg-gray-200'}`}
+                    >
+                      {pushLoading
+                        ? <Loader2 className="w-3 h-3 animate-spin absolute inset-0 m-auto text-white" />
+                        : <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${pushState === 'granted' ? 'left-5' : 'left-0.5'}`} />
+                      }
+                    </button>
+                  )}
+                </div>
+              )}
+
               <button onClick={() => setView('support')}
                 className="w-full flex items-center justify-between bg-gray-50 hover:bg-gray-100 border border-gray-100 rounded-2xl px-4 py-3.5 transition-colors"
               >

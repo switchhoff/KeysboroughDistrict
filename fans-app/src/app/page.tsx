@@ -1,15 +1,31 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { collection, getDocs, doc, getDoc, addDoc, updateDoc, orderBy, query } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { Fan, FanAuthState } from '@/lib/types'
 import { storeFanAuth, getStoredFanAuth } from '@/lib/fanAuth'
+import { getPushState, subscribeToPush } from '@/lib/pushNotifications'
 import { useRouter } from 'next/navigation'
 import FanHeader from '@/components/FanHeader'
-import { Loader2, ChevronRight, UserPlus, Eye, EyeOff } from 'lucide-react'
+import { Loader2, ChevronRight, UserPlus, Eye, EyeOff, Bell } from 'lucide-react'
 
-type View = 'list' | 'pin' | 'set-pin' | 'register'
+type View = 'list' | 'pin' | 'set-pin' | 'register' | 'notify'
+
+const MAX_ATTEMPTS   = 5
+const LOCKOUT_MS     = 5 * 60 * 1000  // 5 minutes
+
+function getLockout(fanId: string): { attempts: number; lockedUntil: number } {
+  try {
+    return JSON.parse(localStorage.getItem(`kpp_lockout_${fanId}`) ?? '{}')
+  } catch { return { attempts: 0, lockedUntil: 0 } }
+}
+function setLockout(fanId: string, attempts: number, lockedUntil: number) {
+  localStorage.setItem(`kpp_lockout_${fanId}`, JSON.stringify({ attempts, lockedUntil }))
+}
+function clearLockout(fanId: string) {
+  localStorage.removeItem(`kpp_lockout_${fanId}`)
+}
 
 export default function FansPage() {
   const router = useRouter()
@@ -25,6 +41,10 @@ export default function FansPage() {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [search, setSearch] = useState('')
+  const [lockedSecsLeft, setLockedSecsLeft] = useState(0)
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [pendingFanId,  setPendingFanId]  = useState<string | null>(null)
+  const [notifLoading,  setNotifLoading]  = useState(false)
 
   useEffect(() => {
     const stored = getStoredFanAuth()
@@ -42,6 +62,34 @@ export default function FansPage() {
     }
   }
 
+  const startCountdown = (lockedUntil: number) => {
+    if (countdownRef.current) clearInterval(countdownRef.current)
+    const tick = () => {
+      const secs = Math.ceil((lockedUntil - Date.now()) / 1000)
+      if (secs <= 0) {
+        setLockedSecsLeft(0)
+        clearInterval(countdownRef.current!)
+      } else {
+        setLockedSecsLeft(secs)
+      }
+    }
+    tick()
+    countdownRef.current = setInterval(tick, 1000)
+  }
+
+  useEffect(() => () => { if (countdownRef.current) clearInterval(countdownRef.current) }, [])
+
+  const goAfterAuth = (fanId: string, auth: FanAuthState) => {
+    storeFanAuth(auth)
+    const state = getPushState()
+    if (state === 'default') {
+      setPendingFanId(fanId)
+      setView('notify')
+    } else {
+      router.replace('/rounds')
+    }
+  }
+
   const resetSetPin = () => {
     setNewPin('')
     setConfirmPin('')
@@ -53,6 +101,9 @@ export default function FansPage() {
     setSelectedFan(fan)
     setPin('')
     setError('')
+    const { lockedUntil } = getLockout(fan.id)
+    if (lockedUntil > Date.now()) startCountdown(lockedUntil)
+    else setLockedSecsLeft(0)
     if (!fan.pin) {
       resetSetPin()
       setView('set-pin')
@@ -63,16 +114,37 @@ export default function FansPage() {
 
   const handleLogin = async () => {
     if (!selectedFan || pin.length < 4) return
+
+    // Check lockout
+    const lockout = getLockout(selectedFan.id)
+    if (lockout.lockedUntil > Date.now()) return
+
     setSubmitting(true)
     setError('')
     try {
       const snap = await getDoc(doc(db, 'fans', selectedFan.id))
       if (!snap.exists()) { setError('Fan not found.'); return }
       const fan = snap.data() as Fan
-      if (fan.pin !== pin) { setError('Incorrect PIN. Try again.'); return }
+
+      if (fan.pin !== pin) {
+        const attempts = (lockout.attempts ?? 0) + 1
+        const remaining = MAX_ATTEMPTS - attempts
+        if (attempts >= MAX_ATTEMPTS) {
+          const lockedUntil = Date.now() + LOCKOUT_MS
+          setLockout(selectedFan.id, attempts, lockedUntil)
+          startCountdown(lockedUntil)
+          setError(`Too many attempts. Try again in 5 minutes.`)
+        } else {
+          setLockout(selectedFan.id, attempts, 0)
+          setError(`Incorrect PIN. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`)
+        }
+        setPin('')
+        return
+      }
+
+      clearLockout(selectedFan.id)
       const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name }
-      storeFanAuth(auth)
-      router.replace('/rounds')
+      goAfterAuth(selectedFan.id, auth)
     } finally {
       setSubmitting(false)
     }
@@ -87,8 +159,7 @@ export default function FansPage() {
     try {
       await updateDoc(doc(db, 'fans', selectedFan.id), { pin: newPin })
       const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name }
-      storeFanAuth(auth)
-      router.replace('/rounds')
+      goAfterAuth(selectedFan.id, auth)
     } finally {
       setSubmitting(false)
     }
@@ -107,8 +178,7 @@ export default function FansPage() {
         createdAt: Date.now(),
       })
       const auth: FanAuthState = { fanId: ref.id, fanName: newName.trim() }
-      storeFanAuth(auth)
-      router.replace('/rounds')
+      goAfterAuth(ref.id, auth)
     } finally {
       setSubmitting(false)
     }
@@ -185,27 +255,37 @@ export default function FansPage() {
                 <p className="text-sm text-gray-500">{selectedFan.name}</p>
               </div>
             </div>
-            <div className="space-y-3">
-              <div className="relative">
-                <input
-                  type={showPin ? 'text' : 'password'}
-                  inputMode="numeric"
-                  placeholder="Enter your PIN"
-                  value={pin}
-                  onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 6)); setError('') }}
-                  onKeyDown={e => e.key === 'Enter' && handleLogin()}
-                  className="w-full border border-gray-200 rounded-2xl px-4 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-club-red/30 bg-white pr-12"
-                  autoFocus
-                />
-                <button type="button" onClick={() => setShowPin(s => !s)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
-                  {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            {lockedSecsLeft > 0 ? (
+              <div className="bg-red-50 border border-red-200 rounded-2xl p-5 text-center space-y-2">
+                <div className="text-3xl font-black text-red-500 tabular-nums">
+                  {Math.floor(lockedSecsLeft / 60)}:{String(lockedSecsLeft % 60).padStart(2, '0')}
+                </div>
+                <p className="text-sm font-semibold text-red-700">Account temporarily locked</p>
+                <p className="text-xs text-red-400">Too many incorrect PIN attempts. Please wait.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="relative">
+                  <input
+                    type={showPin ? 'text' : 'password'}
+                    inputMode="numeric"
+                    placeholder="Enter your PIN"
+                    value={pin}
+                    onChange={e => { setPin(e.target.value.replace(/\D/g, '').slice(0, 6)); setError('') }}
+                    onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                    className="w-full border border-gray-200 rounded-2xl px-4 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-club-red/30 bg-white pr-12"
+                    autoFocus
+                  />
+                  <button type="button" onClick={() => setShowPin(s => !s)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                    {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
+                <button onClick={handleLogin} disabled={pin.length < 4 || submitting} className="btn-primary">
+                  {submitting ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Enter Fan Zone →'}
                 </button>
               </div>
-              {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
-              <button onClick={handleLogin} disabled={pin.length < 4 || submitting} className="btn-primary">
-                {submitting ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Enter Fan Zone →'}
-              </button>
-            </div>
+            )}
           </div>
         )}
 
@@ -301,6 +381,40 @@ export default function FansPage() {
             </div>
           </div>
         )}
+        {view === 'notify' && (
+          <div className="space-y-5 py-4">
+            <div className="flex flex-col items-center text-center gap-3">
+              <div className="w-16 h-16 rounded-full bg-club-red/10 flex items-center justify-center">
+                <Bell className="w-8 h-8 text-club-red" />
+              </div>
+              <div>
+                <h2 className="text-lg font-black text-gray-900">Stay in the loop</h2>
+                <p className="text-sm text-gray-500 mt-1 leading-relaxed">
+                  Get notified for goals, kick off, half time and full time — even when the app is closed.
+                </p>
+              </div>
+            </div>
+            <button
+              disabled={notifLoading}
+              onClick={async () => {
+                if (!pendingFanId) { router.replace('/rounds'); return }
+                setNotifLoading(true)
+                try { await subscribeToPush(pendingFanId) } finally { setNotifLoading(false) }
+                router.replace('/rounds')
+              }}
+              className="w-full flex items-center justify-center gap-2 bg-club-red text-white font-bold py-3.5 rounded-2xl text-sm hover:bg-club-red/90 transition-colors disabled:opacity-60"
+            >
+              {notifLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Bell className="w-4 h-4" /> Enable Notifications</>}
+            </button>
+            <button
+              onClick={() => router.replace('/rounds')}
+              className="w-full text-sm text-gray-400 hover:text-gray-600 py-2 transition-colors"
+            >
+              Skip for now
+            </button>
+          </div>
+        )}
+
       </main>
     </div>
   )

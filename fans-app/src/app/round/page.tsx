@@ -10,6 +10,71 @@ import Link from 'next/link'
 import FanHeader from '@/components/FanHeader'
 import { Loader2, Trophy, MessageCircle, Send, Trash2, X, Zap, Pencil, CheckCircle, ChevronLeft, MapPin } from 'lucide-react'
 
+// ── Confetti ──────────────────────────────────────────────────────────────────
+const CONFETTI_COLORS = ['#c01e1e', '#1e6b3a', '#fbbf24', '#ffffff', '#3b82f6', '#f97316']
+
+function Confetti({ active }: { active: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    if (!active) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    canvas.width  = window.innerWidth
+    canvas.height = window.innerHeight
+
+    const pieces = Array.from({ length: 100 }, () => ({
+      x:    Math.random() * canvas.width,
+      y:    -10 - Math.random() * 120,
+      w:    6 + Math.random() * 8,
+      h:    3 + Math.random() * 4,
+      vy:   3 + Math.random() * 4,
+      vx:   (Math.random() - 0.5) * 2,
+      angle: Math.random() * Math.PI * 2,
+      spin:  (Math.random() - 0.5) * 0.2,
+      color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)],
+    }))
+
+    const start = Date.now()
+    let frame: number
+
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      const elapsed = Date.now() - start
+      const fade = Math.max(0, 1 - (elapsed - 2000) / 1500)
+
+      ctx.globalAlpha = fade
+      pieces.forEach(p => {
+        ctx.save()
+        ctx.translate(p.x, p.y)
+        ctx.rotate(p.angle)
+        ctx.fillStyle = p.color
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h)
+        ctx.restore()
+
+        p.y     += p.vy
+        p.x     += p.vx + Math.sin(elapsed / 200 + p.x) * 0.5
+        p.angle += p.spin
+      })
+
+      if (elapsed < 3500) {
+        frame = requestAnimationFrame(draw)
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+      }
+    }
+
+    frame = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(frame)
+  }, [active])
+
+  if (!active) return null
+  return <canvas ref={canvasRef} className="fixed inset-0 pointer-events-none z-50" />
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
@@ -39,7 +104,7 @@ const voteDocId = (team: Team, fanName: string) => `${team}_${fanName.replace(/[
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface GoalEvent {
   id: string; fanId: string; fanName: string
-  team: Team; type?: 'goal' | 'whistle' | 'halftime'
+  team: Team; type?: 'goal' | 'kickoff' | 'halftime' | 'second_half' | 'whistle'
   scoredBy?: 'kdfc' | 'opponent'
   playerNumber?: string; playerName?: string
   timestamp: number
@@ -100,9 +165,11 @@ function FanRoundInner() {
   const [goalScoredBy,     setGoalScoredBy]     = useState<'kdfc' | 'opponent'>('kdfc')
   const [goalPlayerNum,    setGoalPlayerNum]    = useState('')
   const [goalPlayerName,   setGoalPlayerName]   = useState('')
-  const [submittingGoal,      setSubmittingGoal]      = useState(false)
-  const [submittingWhistle,   setSubmittingWhistle]   = useState<Team | null>(null)
-  const [submittingHalftime,  setSubmittingHalftime]  = useState<Team | null>(null)
+  const [submittingGoal,       setSubmittingGoal]       = useState(false)
+  const [duplicateWarning, setDuplicateWarning] = useState(false)
+  const [submittingPhase,      setSubmittingPhase]      = useState<Team | null>(null)
+  const [confettiActive,       setConfettiActive]       = useState(false)
+  const prevKdfcGoalCount = useRef(0)
 
   const [chatMsg,         setChatMsg]         = useState('')
   const [sendingChat,     setSendingChat]     = useState(false)
@@ -176,9 +243,26 @@ function FanRoundInner() {
     if (primaryTab === 'messages') chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [chat, activeTeam, primaryTab])
 
+  useEffect(() => {
+    const count = goals.filter(g => (!g.type || g.type === 'goal') && g.scoredBy === 'kdfc').length
+    if (count > prevKdfcGoalCount.current) {
+      setConfettiActive(false)
+      requestAnimationFrame(() => setConfettiActive(true))
+      const t = setTimeout(() => setConfettiActive(false), 3600)
+      prevKdfcGoalCount.current = count
+      return () => clearTimeout(t)
+    }
+    prevKdfcGoalCount.current = count
+  }, [goals])
+
   // ── Actions ──────────────────────────────────────────────────────────────────
   const submitGoal = async () => {
     if (!fanAuth || submittingGoal) return
+    // Rate-limit: block if any goal was logged in the last 10 seconds
+    const recentGoal = goals.find(
+      g => (!g.type || g.type === 'goal') && g.team === goalTeam && Date.now() - g.timestamp < 10_000
+    )
+    if (recentGoal) { setDuplicateWarning(true); return }
     setSubmittingGoal(true)
     try {
       await addDoc(collection(db, 'rounds', roundId, 'goals'), {
@@ -194,24 +278,14 @@ function FanRoundInner() {
 
   const deleteGoal = (id: string) => deleteDoc(doc(db, 'rounds', roundId, 'goals', id))
 
-  const submitWhistle = async (team: Team) => {
-    if (!fanAuth || submittingWhistle) return
-    setSubmittingWhistle(team)
+  const advancePhase = async (team: Team, type: 'kickoff' | 'halftime' | 'second_half' | 'whistle') => {
+    if (!fanAuth || submittingPhase) return
+    setSubmittingPhase(team)
     try {
       await addDoc(collection(db, 'rounds', roundId, 'goals'), {
-        fanId: fanAuth.fanId, fanName: fanAuth.fanName, team, type: 'whistle', timestamp: Date.now(),
+        fanId: fanAuth.fanId, fanName: fanAuth.fanName, team, type, timestamp: Date.now(),
       })
-    } finally { setSubmittingWhistle(null) }
-  }
-
-  const submitHalftime = async (team: Team) => {
-    if (!fanAuth || submittingHalftime) return
-    setSubmittingHalftime(team)
-    try {
-      await addDoc(collection(db, 'rounds', roundId, 'goals'), {
-        fanId: fanAuth.fanId, fanName: fanAuth.fanName, team, type: 'halftime', timestamp: Date.now(),
-      })
-    } finally { setSubmittingHalftime(null) }
+    } finally { setSubmittingPhase(null) }
   }
 
   const handleVote = async (team: Team, playerId: string) => {
@@ -266,8 +340,18 @@ function FanRoundInner() {
   const myVote        = myVotes[activeTeam]
   const teamEvents    = goals.filter(g => g.team === activeTeam)
   const teamGoals     = teamEvents.filter(g => !g.type || g.type === 'goal')
-  const hasWhistle    = teamEvents.some(g => g.type === 'whistle')
+  const hasKickoff    = teamEvents.some(g => g.type === 'kickoff')
   const hasHalftime   = teamEvents.some(g => g.type === 'halftime')
+  const hasSecondHalf = teamEvents.some(g => g.type === 'second_half')
+  const hasWhistle    = teamEvents.some(g => g.type === 'whistle')
+  // backward compat: goals logged without a kickoff event imply game started
+  const gameStarted   = hasKickoff || teamGoals.length > 0
+  type GamePhase = 'pre' | 'first_half' | 'half_time' | 'second_half' | 'full_time'
+  const gamePhase: GamePhase =
+    hasWhistle    ? 'full_time'   :
+    hasSecondHalf ? 'second_half' :
+    hasHalftime   ? 'half_time'   :
+    gameStarted   ? 'first_half'  : 'pre'
   const liveScore     = {
     kdfc: teamGoals.filter(g => g.scoredBy === 'kdfc').length,
     opp:  teamGoals.filter(g => g.scoredBy === 'opponent').length,
@@ -295,6 +379,27 @@ function FanRoundInner() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
+      <Confetti active={confettiActive} />
+
+      {/* Duplicate goal warning */}
+      {duplicateWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-6">
+          <div className="bg-white rounded-2xl p-6 max-w-xs w-full shadow-2xl space-y-3">
+            <div className="text-2xl text-center">⚽</div>
+            <h3 className="font-black text-gray-900 text-center text-base">Goal already logged!</h3>
+            <p className="text-sm text-gray-500 text-center">
+              Someone else just added a goal. Check the feed — if it&apos;s already there, no need to add it again.
+            </p>
+            <button
+              onClick={() => setDuplicateWarning(false)}
+              className="w-full bg-club-red text-white font-bold py-2.5 rounded-xl text-sm hover:bg-club-red/90 transition-colors"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
+
       <FanHeader fanName={fanAuth?.fanName} />
 
       {/* Round title bar with back button */}
@@ -393,35 +498,59 @@ function FanRoundInner() {
                         </span>
                       )
                     })()}
-                    {hasWhistle   && <span className="text-xs font-bold text-gray-400">FT</span>}
-                    {!hasWhistle && hasHalftime && <span className="text-xs font-bold text-amber-500">HT</span>}
+                    {gamePhase === 'full_time'   && <span className="text-xs font-bold text-gray-400">FT</span>}
+                    {gamePhase === 'second_half' && <span className="text-xs font-bold text-blue-500">2nd</span>}
+                    {gamePhase === 'half_time'   && <span className="text-xs font-bold text-amber-500">HT</span>}
+                    {gamePhase === 'first_half'  && <span className="text-xs font-bold text-green-600">1st</span>}
                   </h2>
                   <p className="text-sm text-gray-400">Live match events</p>
                 </div>
-                {!isFormOpen && !hasWhistle && (
-                  <div className="flex items-center gap-1.5">
-                    {!hasHalftime && (
+                {!isFormOpen && gamePhase !== 'full_time' && (
+                  <div className="flex items-center gap-2">
+                    {(gamePhase === 'first_half' || gamePhase === 'second_half') && (
                       <button
-                        onClick={() => submitHalftime(activeTeam)}
-                        disabled={submittingHalftime === activeTeam}
-                        className="flex items-center gap-1 text-xs font-bold text-amber-600 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded-full transition-colors disabled:opacity-50"
+                        onClick={() => { setGoalTeam(activeTeam); setGoalScoredBy('kdfc'); setGoalPlayerNum(''); setGoalPlayerName(''); setAddingGoal(true) }}
+                        className={`flex items-center gap-1 text-xs font-bold ${accent.text} ${accent.bg} ${accent.hover} px-3 py-1.5 rounded-full transition-colors`}
                       >
-                        {submittingHalftime === activeTeam ? <Loader2 className="w-3 h-3 animate-spin" /> : '+ Half Time'}
+                        + Goal
                       </button>
                     )}
-                    <button
-                      onClick={() => submitWhistle(activeTeam)}
-                      disabled={submittingWhistle === activeTeam}
-                      className="flex items-center gap-1 text-xs font-bold text-gray-400 bg-gray-100 hover:bg-gray-200 px-2.5 py-1.5 rounded-full transition-colors disabled:opacity-50"
-                    >
-                      {submittingWhistle === activeTeam ? <Loader2 className="w-3 h-3 animate-spin" /> : '+ Final Whistle'}
-                    </button>
-                    <button
-                      onClick={() => { setGoalTeam(activeTeam); setGoalScoredBy('kdfc'); setGoalPlayerNum(''); setGoalPlayerName(''); setAddingGoal(true) }}
-                      className={`flex items-center gap-1 text-xs font-bold ${accent.text} ${accent.bg} ${accent.hover} px-3 py-1.5 rounded-full transition-colors`}
-                    >
-                      + Goal
-                    </button>
+                    {gamePhase === 'pre' && (
+                      <button
+                        onClick={() => advancePhase(activeTeam, 'kickoff')}
+                        disabled={submittingPhase === activeTeam}
+                        className="flex items-center gap-1.5 text-xs font-bold text-white bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded-full transition-colors disabled:opacity-50"
+                      >
+                        {submittingPhase === activeTeam ? <Loader2 className="w-3 h-3 animate-spin" /> : '▶ Kick Off'}
+                      </button>
+                    )}
+                    {gamePhase === 'first_half' && (
+                      <button
+                        onClick={() => advancePhase(activeTeam, 'halftime')}
+                        disabled={submittingPhase === activeTeam}
+                        className="flex items-center gap-1.5 text-xs font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-3 py-1.5 rounded-full transition-colors disabled:opacity-50"
+                      >
+                        {submittingPhase === activeTeam ? <Loader2 className="w-3 h-3 animate-spin" /> : '⏸ Half Time'}
+                      </button>
+                    )}
+                    {gamePhase === 'half_time' && (
+                      <button
+                        onClick={() => advancePhase(activeTeam, 'second_half')}
+                        disabled={submittingPhase === activeTeam}
+                        className="flex items-center gap-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded-full transition-colors disabled:opacity-50"
+                      >
+                        {submittingPhase === activeTeam ? <Loader2 className="w-3 h-3 animate-spin" /> : '▶ 2nd Half KO'}
+                      </button>
+                    )}
+                    {gamePhase === 'second_half' && (
+                      <button
+                        onClick={() => advancePhase(activeTeam, 'whistle')}
+                        disabled={submittingPhase === activeTeam}
+                        className="flex items-center gap-1.5 text-xs font-bold text-gray-500 bg-gray-100 hover:bg-gray-200 border border-gray-200 px-3 py-1.5 rounded-full transition-colors disabled:opacity-50"
+                      >
+                        {submittingPhase === activeTeam ? <Loader2 className="w-3 h-3 animate-spin" /> : '⏱ Final Whistle'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -474,6 +603,24 @@ function FanRoundInner() {
                     const isWhistle = g.type === 'whistle'
                     const canDelete = g.fanId === fanAuth?.fanId
 
+                    // ── Kick Off ──────────────────────────────────────────
+                    if (g.type === 'kickoff') return (
+                      <div key={g.id} className="flex items-center gap-2">
+                        <div className="flex-1 flex items-center justify-center gap-2.5 bg-green-50 border border-green-200 rounded-xl px-4 py-2.5">
+                          <span className="text-base leading-none shrink-0">▶️</span>
+                          <div className="text-center">
+                            <div className="font-bold text-green-700 text-sm">Kick Off</div>
+                            <div className="text-xs text-gray-400">Submitted by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                          </div>
+                        </div>
+                        {canDelete ? (
+                          <button onClick={() => deleteGoal(g.id)} className="w-9 h-full min-h-[44px] flex items-center justify-center bg-white border border-gray-200 rounded-xl text-gray-300 hover:text-red-400 hover:border-red-200 transition-colors shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : <div className="w-9 shrink-0" />}
+                      </div>
+                    )
+
                     // ── Half Time ──────────────────────────────────────────
                     if (g.type === 'halftime') return (
                       <div key={g.id} className="flex items-center gap-2">
@@ -481,7 +628,25 @@ function FanRoundInner() {
                           <span className="text-base leading-none shrink-0">⏸️</span>
                           <div className="text-center">
                             <div className="font-bold text-amber-700 text-sm">Half Time</div>
-                            <div className="text-xs text-gray-400">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                            <div className="text-xs text-gray-400">Submitted by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                          </div>
+                        </div>
+                        {canDelete ? (
+                          <button onClick={() => deleteGoal(g.id)} className="w-9 h-full min-h-[44px] flex items-center justify-center bg-white border border-gray-200 rounded-xl text-gray-300 hover:text-red-400 hover:border-red-200 transition-colors shrink-0">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : <div className="w-9 shrink-0" />}
+                      </div>
+                    )
+
+                    // ── 2nd Half KO ───────────────────────────────────────
+                    if (g.type === 'second_half') return (
+                      <div key={g.id} className="flex items-center gap-2">
+                        <div className="flex-1 flex items-center justify-center gap-2.5 bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5">
+                          <span className="text-base leading-none shrink-0">▶️</span>
+                          <div className="text-center">
+                            <div className="font-bold text-blue-700 text-sm">2nd Half Kick Off</div>
+                            <div className="text-xs text-gray-400">Submitted by {g.fanName} · {fmtStamp(g.timestamp)}</div>
                           </div>
                         </div>
                         {canDelete ? (
@@ -499,7 +664,7 @@ function FanRoundInner() {
                           <span className="text-base leading-none shrink-0">⏱️</span>
                           <div className="text-center">
                             <div className="font-bold text-gray-600 text-sm">Full Time</div>
-                            <div className="text-xs text-gray-400">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                            <div className="text-xs text-gray-400">Submitted by {g.fanName} · {fmtStamp(g.timestamp)}</div>
                           </div>
                         </div>
                         {canDelete ? (
@@ -522,7 +687,7 @@ function FanRoundInner() {
                               </span>
                             )}
                           </div>
-                          <div className="text-xs text-gray-400 mt-0.5">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                          <div className="text-xs text-gray-400 mt-0.5">Submitted by {g.fanName} · {fmtStamp(g.timestamp)}</div>
                         </div>
                         {canDelete ? (
                           <button onClick={() => deleteGoal(g.id)} className="w-9 h-full min-h-[44px] flex items-center justify-center bg-white border border-gray-200 rounded-xl text-gray-300 hover:text-red-400 hover:border-red-200 transition-colors shrink-0">
@@ -538,7 +703,7 @@ function FanRoundInner() {
                         <div className="flex-1 bg-white border border-gray-200 rounded-xl px-4 py-2.5 flex items-center justify-end gap-2.5">
                           <div className="text-right">
                             <div className="font-semibold text-gray-700 text-sm">{round.opponent} ⚽</div>
-                            <div className="text-xs text-gray-400 mt-0.5">by {g.fanName} · {fmtStamp(g.timestamp)}</div>
+                            <div className="text-xs text-gray-400 mt-0.5">Submitted by {g.fanName} · {fmtStamp(g.timestamp)}</div>
                           </div>
                         </div>
                         {canDelete ? (
@@ -575,12 +740,23 @@ function FanRoundInner() {
                     className="w-full flex items-center justify-between bg-white border border-gray-100 rounded-2xl px-4 py-3 hover:border-club-red/30 hover:shadow-sm transition-all group text-left"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-club-red/10 flex items-center justify-center shrink-0">
-                        <span className="text-sm font-bold text-club-red">
-                          {round?.numbers?.[activeTeam]?.[p.id] ?? p.name[0]}
-                        </span>
+                      {p.photoUrl ? (
+                        <img src={p.photoUrl} alt={p.name}
+                          className="w-10 h-10 rounded-full object-cover shrink-0 border-2 border-gray-100 group-hover:border-club-red/30 transition-colors"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full bg-club-red/10 flex items-center justify-center shrink-0">
+                          <span className="text-sm font-bold text-club-red">
+                            {round?.numbers?.[activeTeam]?.[p.id] ?? p.name[0]}
+                          </span>
+                        </div>
+                      )}
+                      <div>
+                        <span className="font-semibold text-gray-800 text-sm block">{p.name}</span>
+                        {round?.numbers?.[activeTeam]?.[p.id] && (
+                          <span className="text-xs text-gray-400">#{round.numbers[activeTeam]![p.id]}</span>
+                        )}
                       </div>
-                      <span className="font-semibold text-gray-800 text-sm">{p.name}</span>
                     </div>
                     <Trophy className="w-4 h-4 text-gray-200 group-hover:text-club-red transition-colors" />
                   </button>
@@ -608,7 +784,13 @@ function FanRoundInner() {
                       <div key={player.id}>
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-2">
-                            {i === 0 && count > 0 && <Trophy className="w-3.5 h-3.5 text-amber-400" />}
+                            {player.photoUrl ? (
+                              <img src={player.photoUrl} alt={player.name}
+                                className="w-6 h-6 rounded-full object-cover shrink-0 border border-gray-100"
+                              />
+                            ) : (
+                              i === 0 && count > 0 && <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                            )}
                             <span className={`text-sm font-semibold ${player.id === myVote ? 'text-club-red' : 'text-gray-700'}`}>
                               {round?.numbers?.[activeTeam]?.[player.id] && (
                                 <span className="text-xs font-bold opacity-50 mr-1">#{round.numbers[activeTeam]![player.id]}</span>
@@ -616,6 +798,7 @@ function FanRoundInner() {
                               {player.name}
                               {player.id === myVote && <span className="text-xs text-club-red/60 ml-1">(you)</span>}
                             </span>
+                            {player.photoUrl && i === 0 && count > 0 && <Trophy className="w-3.5 h-3.5 text-amber-400" />}
                           </div>
                           <span className="text-xs font-bold text-gray-400">{count}</span>
                         </div>
