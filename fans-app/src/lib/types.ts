@@ -77,11 +77,21 @@ export interface PendingVote {
 
 // ── Fan (spectator) types ──────────────────────────────────────────────────
 
+export interface NotificationSettings {
+  kickoff: boolean
+  goalsKDFC: boolean
+  goalsOpp: boolean
+  halftime: boolean
+  fulltime: boolean
+}
+
 export interface Fan {
   id: string
   name: string
   pin: string
   createdAt: number
+  fanPushSubscription?: any
+  notificationSettings?: NotificationSettings
 }
 
 export interface FanAuthState {

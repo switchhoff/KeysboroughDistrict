@@ -12,9 +12,9 @@ import {
   where, orderBy, updateDoc, doc, getDoc,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { FanAuthState, SupportRequest, SupportMessage } from '@/lib/types'
+import { FanAuthState, SupportRequest, SupportMessage, NotificationSettings } from '@/lib/types'
 
-type View = 'menu' | 'pin' | 'support' | 'chat'
+type View = 'menu' | 'pin' | 'support' | 'chat' | 'notifs'
 
 interface Props {
   fanAuth: FanAuthState | null
@@ -52,8 +52,30 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
   const [pinSuccess,   setPinSuccess]   = useState(false)
   const [pushState,    setPushState]    = useState<PushState>('unsupported')
   const [pushLoading,  setPushLoading]  = useState(false)
+  const [notifSettings, setNotifSettings] = useState<NotificationSettings>({
+    kickoff: true,
+    goalsKDFC: true,
+    goalsOpp: true,
+    halftime: true,
+    fulltime: true,
+  })
+  const [settingsLoading, setSettingsLoading] = useState(false)
 
-  useEffect(() => { setPushState(getPushState()) }, [])
+  useEffect(() => {
+    setPushState(getPushState())
+    if (fanAuth) {
+      setSettingsLoading(true)
+      getDoc(doc(db, 'fans', fanAuth.fanId)).then(snap => {
+        if (snap.exists()) {
+          const data = snap.data()
+          if (data.notificationSettings) {
+            setNotifSettings(data.notificationSettings)
+          }
+        }
+        setSettingsLoading(false)
+      })
+    }
+  }, [fanAuth])
 
   const msgEndRef = useRef<HTMLDivElement>(null)
 
@@ -138,6 +160,14 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
     } finally { setPinSaving(false) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fanAuth, oldPin, newPin, confirmPin])
+  const updateNotifSetting = async (key: keyof NotificationSettings, val: boolean) => {
+    if (!fanAuth) return
+    const newSettings = { ...notifSettings, [key]: val }
+    setNotifSettings(newSettings)
+    await updateDoc(doc(db, 'fans', fanAuth.fanId), {
+      notificationSettings: newSettings
+    })
+  }
 
   const goToChat = async (r: SupportRequest) => {
     setActiveReq(r); setView('chat')
@@ -148,6 +178,7 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
   }
   const goBack   = () => {
     if (view === 'chat') { setActiveReq(null); setView('support') }
+    else if (view === 'notifs') { setView('menu') }
     else                 { setView('menu') }
   }
 
@@ -184,6 +215,7 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
               {view === 'menu'    ? 'Settings'       :
                view === 'pin'    ? 'Change PIN'      :
                view === 'support'? 'Support & Ideas' :
+               view === 'notifs' ? 'Notifications'   :
                                    (activeReq?.subject ?? 'Chat')}
             </span>
           </div>
@@ -234,9 +266,10 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
                 <span className="font-semibold text-gray-800 text-sm">Change PIN</span>
                 <ChevronRight className="w-4 h-4 text-gray-400" />
               </button>
-              {/* Notifications toggle */}
               {pushState !== 'unsupported' && (
-                <div className="w-full flex items-center justify-between bg-gray-50 border border-gray-100 rounded-2xl px-4 py-3.5">
+                <button onClick={() => setView('notifs')}
+                  className="w-full flex items-center justify-between bg-gray-50 hover:bg-gray-100 border border-gray-100 rounded-2xl px-4 py-3.5 transition-colors"
+                >
                   <div className="flex items-center gap-2.5">
                     {pushState === 'granted'
                       ? <Bell className="w-4 h-4 text-club-red shrink-0" />
@@ -245,38 +278,14 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
                     <div>
                       <span className="font-semibold text-gray-800 text-sm block">Match Notifications</span>
                       <span className="text-xs text-gray-400">
-                        {pushState === 'granted' ? 'On — goals, kick off, half time & full time' :
+                        {pushState === 'granted' ? 'Manage specific alerts' :
                          pushState === 'denied'  ? 'Blocked — enable in browser settings' :
                                                    'Off — tap for live match alerts'}
                       </span>
                     </div>
                   </div>
-                  {pushState !== 'denied' && (
-                    <button
-                      disabled={pushLoading}
-                      onClick={async () => {
-                        if (!fanAuth) return
-                        setPushLoading(true)
-                        try {
-                          if (pushState === 'granted') {
-                            await unsubscribeFromPush(fanAuth.fanId)
-                            setPushState('default')
-                          } else {
-                            const ok = await subscribeToPush(fanAuth.fanId)
-                            if (ok) setPushState('granted')
-                            else setPushState(getPushState())
-                          }
-                        } finally { setPushLoading(false) }
-                      }}
-                      className={`relative w-11 h-6 rounded-full transition-colors shrink-0 disabled:opacity-50 ${pushState === 'granted' ? 'bg-club-red' : 'bg-gray-200'}`}
-                    >
-                      {pushLoading
-                        ? <Loader2 className="w-3 h-3 animate-spin absolute inset-0 m-auto text-white" />
-                        : <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${pushState === 'granted' ? 'left-5' : 'left-0.5'}`} />
-                      }
-                    </button>
-                  )}
-                </div>
+                  <ChevronRight className="w-4 h-4 text-gray-400" />
+                </button>
               )}
 
               <button onClick={() => setView('support')}
@@ -343,6 +352,78 @@ export default function SettingsModal({ fanAuth, onClose }: Props) {
                 {pinSaving ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Save New PIN'}
               </button>
             </>
+          )}
+
+          {/* ── Notifications ────────────────────────────────────────────────── */}
+          {fanAuth && view === 'notifs' && (
+            <div className="space-y-4">
+              <div className="bg-gray-50 border border-gray-100 rounded-2xl px-4 py-4 mb-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${pushState === 'granted' ? 'bg-club-red/10 text-club-red' : 'bg-gray-200 text-gray-400'}`}>
+                      {pushState === 'granted' ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
+                    </div>
+                    <div>
+                      <p className="font-bold text-gray-900 text-sm">Master Toggle</p>
+                      <p className="text-xs text-gray-500">Enable or disable all alerts</p>
+                    </div>
+                  </div>
+                  {pushState !== 'denied' && (
+                    <button
+                      disabled={pushLoading}
+                      onClick={async () => {
+                        if (!fanAuth) return
+                        setPushLoading(true)
+                        try {
+                          if (pushState === 'granted') {
+                            await unsubscribeFromPush(fanAuth.fanId)
+                            setPushState('default')
+                          } else {
+                            const ok = await subscribeToPush(fanAuth.fanId)
+                            if (ok) setPushState('granted')
+                            else setPushState(getPushState())
+                          }
+                        } finally { setPushLoading(false) }
+                      }}
+                      className={`relative w-12 h-7 rounded-full transition-colors shrink-0 disabled:opacity-50 ${pushState === 'granted' ? 'bg-club-red' : 'bg-gray-200'}`}
+                    >
+                      {pushLoading
+                        ? <Loader2 className="w-4 h-4 animate-spin absolute inset-0 m-auto text-white" />
+                        : <span className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all ${pushState === 'granted' ? 'left-6' : 'left-1'}`} />
+                      }
+                    </button>
+                  )}
+                </div>
+                {pushState === 'denied' && (
+                  <p className="mt-3 text-[10px] text-red-500 font-semibold bg-red-50 p-2 rounded-lg text-center">
+                    Notifications are blocked in your browser settings.
+                  </p>
+                )}
+              </div>
+
+              {pushState === 'granted' && (
+                <div className="space-y-2">
+                  <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Alert Preferences</h3>
+                  {[
+                    { id: 'kickoff',  label: 'Match Kick-Off' },
+                    { id: 'goalsKDFC', label: 'Goals by KDFC' },
+                    { id: 'goalsOpp',  label: 'Goals by Opposition' },
+                    { id: 'halftime',  label: 'Half-Time Scores' },
+                    { id: 'fulltime',  label: 'Full-Time Result' },
+                  ].map(({ id, label }) => (
+                    <div key={id} className="flex items-center justify-between bg-white border border-gray-100 rounded-2xl px-4 py-3.5 shadow-sm">
+                      <span className="text-sm font-semibold text-gray-700">{label}</span>
+                      <button
+                        onClick={() => updateNotifSetting(id as keyof NotificationSettings, !notifSettings[id as keyof NotificationSettings])}
+                        className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${notifSettings[id as keyof NotificationSettings] ? 'bg-club-green' : 'bg-gray-200'}`}
+                      >
+                        <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${notifSettings[id as keyof NotificationSettings] ? 'left-5.5' : 'left-0.5'}`} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
           {/* ── Support list ────────────────────────────────────────────────── */}

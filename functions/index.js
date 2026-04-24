@@ -145,11 +145,17 @@ async function getScore(db, roundId, team) {
   return `${kdfc}-${opp}`
 }
 
-async function pushToFans(db, roundId, title, body, icon) {
+async function pushToFans(db, roundId, title, body, icon, type) {
   const url = `${FANS_URL}/round?roundId=${roundId}`
   const fansSnap = await db.collection('fans').get()
   const sends = fansSnap.docs
-    .filter(d => d.data().fanPushSubscription)
+    .filter(d => {
+      const fan = d.data()
+      if (!fan.fanPushSubscription) return false
+      // If user has settings, check the specific toggle for this type
+      if (type && fan.notificationSettings && fan.notificationSettings[type] === false) return false
+      return true
+    })
     .map(fanDoc =>
       webpush.sendNotification(
         fanDoc.data().fanPushSubscription,
@@ -186,8 +192,7 @@ exports.onGoalLogged = functions
     const roundId = context.params.roundId
     const score = await getScore(db, roundId, goal.team)
 
-    let title, body
-
+    let title, body, notifType
     let icon = 'icon-goal.svg'
 
     if (!type || type === 'goal') {
@@ -196,35 +201,41 @@ exports.onGoalLogged = functions
         const opponent = roundSnap.exists ? (roundSnap.data().opponent ?? 'Opposition') : 'Opposition'
         title = `⚽ ${team} (${score})`
         body  = `${opponent} have scored`
+        notifType = 'goalsOpp'
       } else {
         title = `⚽ ${team} (${score})`
         body  = goal.playerName   ? `KDFC Goal! ${goal.playerName} scores`
               : goal.playerNumber ? `KDFC Goal! #${goal.playerNumber} scores`
               : 'KDFC have scored!'
+        notifType = 'goalsKDFC'
       }
       icon = 'icon-goal.svg'
     } else if (type === 'kickoff') {
       title = `🟢 ${team} (${score})`
       body  = 'Kick Off — match has started!'
       icon  = 'icon-play.svg'
+      notifType = 'kickoff'
     } else if (type === 'halftime') {
       title = `⏸ ${team} (${score})`
       body  = 'Half Time'
       icon  = 'icon-halftime.svg'
+      notifType = 'halftime'
     } else if (type === 'second_half') {
       title = `▶ ${team} (${score})`
       body  = '2nd Half underway!'
       icon  = 'icon-play.svg'
+      notifType = 'kickoff'
     } else if (type === 'whistle') {
       title = `⏱ ${team} (${score})`
       body  = 'Full Time — check the result!'
       icon  = 'icon-whistle.svg'
+      notifType = 'fulltime'
     } else {
       return  // unknown type, ignore
     }
 
-    const sent = await pushToFans(db, roundId, title, body, icon)
-    console.log(`Push [${type ?? 'goal'}] sent to ${sent} fans`)
+    const sent = await pushToFans(db, roundId, title, body, icon, notifType)
+    console.log(`Push [${type ?? 'goal'}] sent to ${sent} fans (type: ${notifType})`)
   })
 
 // ── Push fans when a goal is deleted ─────────────────────────────────────
@@ -256,7 +267,8 @@ exports.onGoalDeleted = functions
       : goal.playerNumber ? `Goal removed — #${goal.playerNumber}`
       : 'KDFC goal removed'
 
-    const sent = await pushToFans(db, roundId, title, body, 'icon-goal.svg')
+    const notifType = goal.scoredBy === 'opponent' ? 'goalsOpp' : 'goalsKDFC'
+    const sent = await pushToFans(db, roundId, title, body, 'icon-goal.svg', notifType)
     console.log(`Push [goal-deleted] sent to ${sent} fans`)
   })
 
