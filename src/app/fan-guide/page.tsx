@@ -120,39 +120,54 @@ export default function FanGuidePage() {
             </h2>
             <p className="text-[11px] text-gray-400 mb-2">Open in <strong className="text-gray-600">Safari</strong> on iPhone or <strong className="text-gray-600">Chrome</strong> on Android.</p>
 
-            <div className="grid grid-cols-2 gap-2 mt-2">
-              <div className="border border-gray-100 rounded-xl p-2.5">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-sm">🍎</span>
-                  <span className="font-black text-gray-900 text-xs">iPhone / iPad</span>
+            <div className="grid grid-cols-[1.2fr,1fr] gap-3 mt-2 items-start">
+              <div className="space-y-2">
+                <div className="border border-gray-100 rounded-xl p-2.5">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <span className="text-sm">🍎</span>
+                    <span className="font-black text-gray-900 text-xs">iPhone / iPad</span>
+                  </div>
+                  <ol className="space-y-1">
+                    {iosSteps.map((s, i) => (
+                      <li key={i} className="flex gap-1.5 items-start">
+                        <span className="w-3.5 h-3.5 rounded-full bg-gray-100 flex items-center justify-center text-[8px] font-black text-gray-500 shrink-0 mt-0.5">
+                          {i + 1}
+                        </span>
+                        <span className="text-[11px] text-gray-600 leading-snug">{s}</span>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
-                <ol className="space-y-1">
-                  {iosSteps.map((s, i) => (
-                    <li key={i} className="flex gap-1.5 items-start">
-                      <span className="w-3.5 h-3.5 rounded-full bg-gray-100 flex items-center justify-center text-[8px] font-black text-gray-500 shrink-0 mt-0.5">
-                        {i + 1}
-                      </span>
-                      <span className="text-[11px] text-gray-600 leading-snug">{s}</span>
-                    </li>
-                  ))}
-                </ol>
+
+                <div className="border border-gray-100 rounded-xl p-2.5">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <span className="text-sm">🤖</span>
+                    <span className="font-black text-gray-900 text-xs">Android</span>
+                  </div>
+                  <ol className="space-y-1">
+                    {androidSteps.map((s, i) => (
+                      <li key={i} className="flex gap-1.5 items-start">
+                        <span className="w-3.5 h-3.5 rounded-full bg-gray-100 flex items-center justify-center text-[8px] font-black text-gray-500 shrink-0 mt-0.5">
+                          {i + 1}
+                        </span>
+                        <span className="text-[11px] text-gray-600 leading-snug">{s}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
               </div>
 
-              <div className="border border-gray-100 rounded-xl p-2.5">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-sm">🤖</span>
-                  <span className="font-black text-gray-900 text-xs">Android</span>
+              <div className="flex flex-col gap-2">
+                <h3 className="text-[11px] font-black text-gray-900 leading-tight">Turn on Notifications to receive live game updates</h3>
+                <div className="border border-gray-100 rounded-xl overflow-hidden bg-gray-50">
+                  <Image 
+                    src="/notifexample.jpeg" 
+                    alt="Notification Example" 
+                    width={1080} 
+                    height={1389} 
+                    className="w-full h-auto"
+                  />
                 </div>
-                <ol className="space-y-1">
-                  {androidSteps.map((s, i) => (
-                    <li key={i} className="flex gap-1.5 items-start">
-                      <span className="w-3.5 h-3.5 rounded-full bg-gray-100 flex items-center justify-center text-[8px] font-black text-gray-500 shrink-0 mt-0.5">
-                        {i + 1}
-                      </span>
-                      <span className="text-[11px] text-gray-600 leading-snug">{s}</span>
-                    </li>
-                  ))}
-                </ol>
               </div>
             </div>
           </section>
