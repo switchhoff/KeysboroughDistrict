@@ -158,7 +158,7 @@ export default function FanGuidePage() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <h3 className="text-[11px] font-black text-gray-900 leading-tight">Turn on Notifications to receive live game updates</h3>
+                <h3 className="text-[11px] font-black text-gray-900 leading-tight">Turn on Notifications to get live updates</h3>
                 <div className="border border-gray-100 rounded-xl overflow-hidden bg-gray-50">
                   <Image 
                     src="/notifexample.jpeg" 
