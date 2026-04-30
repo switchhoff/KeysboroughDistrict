@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 200" font-family="system-ui, sans-serif">
+  <!-- Title -->
+  <text x="340" y="22" text-anchor="middle" fill="#ccc" font-size="12" font-weight="600">Role-Based Access</text>
+
+  <!-- Player -->
+  <rect x="20" y="40" width="140" height="140" rx="10" fill="#0f172a" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="90" y="62" text-anchor="middle" fill="#3b82f6" font-size="12" font-weight="700">Player</text>
+  <text x="90" y="82" text-anchor="middle" fill="#60a5fa" font-size="10">🗳 Vote (3-2-1)</text>
+  <text x="90" y="99" text-anchor="middle" fill="#60a5fa" font-size="10">📊 Leaderboard</text>
+  <text x="90" y="116" text-anchor="middle" fill="#60a5fa" font-size="10">📋 Teamsheet</text>
+  <text x="90" y="133" text-anchor="middle" fill="#60a5fa" font-size="10">🔒 PIN login</text>
+  <text x="90" y="150" text-anchor="middle" fill="#334155" font-size="10">— Admin panel</text>
+  <text x="90" y="167" text-anchor="middle" fill="#334155" font-size="10">— Coach view</text>
+
+  <!-- Coach -->
+  <rect x="190" y="40" width="140" height="140" rx="10" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+  <text x="260" y="62" text-anchor="middle" fill="#10b981" font-size="12" font-weight="700">Coach</text>
+  <text x="260" y="82" text-anchor="middle" fill="#34d399" font-size="10">📊 Stats only</text>
+  <text x="260" y="99" text-anchor="middle" fill="#34d399" font-size="10">⚽ Goals &amp; Assists</text>
+  <text x="260" y="116" text-anchor="middle" fill="#34d399" font-size="10">📋 Round results</text>
+  <text x="260" y="133" text-anchor="middle" fill="#334155" font-size="10">— Voting</text>
+  <text x="260" y="150" text-anchor="middle" fill="#334155" font-size="10">— Admin panel</text>
+  <text x="260" y="167" text-anchor="middle" fill="#334155" font-size="10">— Leaderboard</text>
+
+  <!-- Admin -->
+  <rect x="360" y="40" width="140" height="140" rx="10" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="430" y="62" text-anchor="middle" fill="#f59e0b" font-size="12" font-weight="700">Admin</text>
+  <text x="430" y="82" text-anchor="middle" fill="#fbbf24" font-size="10">🗳 Vote</text>
+  <text x="430" y="99" text-anchor="middle" fill="#fbbf24" font-size="10">⚙️ Admin panel</text>
+  <text x="430" y="116" text-anchor="middle" fill="#fbbf24" font-size="10">👥 Manage players</text>
+  <text x="430" y="133" text-anchor="middle" fill="#fbbf24" font-size="10">📅 Manage rounds</text>
+  <text x="430" y="150" text-anchor="middle" fill="#fbbf24" font-size="10">📊 All stats</text>
+  <text x="430" y="167" text-anchor="middle" fill="#fbbf24" font-size="10">🔔 Notify players</text>
+
+  <!-- Fan -->
+  <rect x="530" y="40" width="140" height="140" rx="10" fill="#0f172a" stroke="#8b5cf6" stroke-width="1.5"/>
+  <text x="600" y="62" text-anchor="middle" fill="#8b5cf6" font-size="12" font-weight="700">Fan</text>
+  <text x="600" y="82" text-anchor="middle" fill="#a78bfa" font-size="10">📺 Live match feed</text>
+  <text x="600" y="99" text-anchor="middle" fill="#a78bfa" font-size="10">⚽ Goal alerts</text>
+  <text x="600" y="116" text-anchor="middle" fill="#a78bfa" font-size="10">🗳 Fan polls</text>
+  <text x="600" y="133" text-anchor="middle" fill="#a78bfa" font-size="10">📊 Read leaderboard</text>
+  <text x="600" y="150" text-anchor="middle" fill="#334155" font-size="10">— MOTM voting</text>
+  <text x="600" y="167" text-anchor="middle" fill="#334155" font-size="10">— Admin panel</text>
+</svg>
