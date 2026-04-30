@@ -173,7 +173,7 @@ export default function FanGuidePage() {
           </section>
 
           <p className="text-center text-xs text-gray-400 pt-1">
-            Chat to <span className="font-semibold text-gray-600">Alex Hofmann (0403 326 837)</span> if you have any questions or ideas on new things to add to the app.
+            Have questions or ideas? Reach out to the app admin.
           </p>
 
         </div>
