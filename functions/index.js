@@ -344,7 +344,7 @@ exports.verifyPin = onCall(
     const { playerId, pin } = request.data
 
     if (!playerId || !pin) {
-      throw new Error('invalid-argument: playerId and pin are required')
+      throw new HttpsError('invalid-argument', 'playerId and pin are required')
     }
 
     const db = admin.firestore()
@@ -360,11 +360,22 @@ exports.verifyPin = onCall(
       throw new HttpsError('permission-denied', 'Incorrect PIN')
     }
 
-    // Issue a custom token with player metadata as claims
-    const token = await admin.auth().createCustomToken(playerId, {
-      role: player.role ?? 'player',
-      team: player.team ?? null,
-    })
+    // Issue a custom token with player metadata as claims.
+    // Requires the function's service account to have the
+    // "Service Account Token Creator" role in GCP IAM.
+    let token
+    try {
+      token = await admin.auth().createCustomToken(playerId, {
+        role: player.role ?? 'player',
+        team: player.team ?? null,
+      })
+    } catch (err) {
+      console.error('createCustomToken failed:', err)
+      throw new HttpsError(
+        'internal',
+        'Token creation failed. Ensure the service account has the "Service Account Token Creator" IAM role. Detail: ' + err.message
+      )
+    }
 
     return { token }
   }
