@@ -1,5 +1,5 @@
 const { onSchedule } = require('firebase-functions/v2/scheduler')
-const { onCall } = require('firebase-functions/v2/https')
+const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const functions = require('firebase-functions')
 const { defineSecret } = require('firebase-functions/params')
 const admin = require('firebase-admin')
@@ -324,5 +324,48 @@ exports.sendTeamNotification = onCall(
 
     await Promise.allSettled(sends)
     return { sent }
+  }
+)
+
+// ── verifyPin ─────────────────────────────────────────────────────────────────
+// Callable function: verifies a player's PIN server-side and returns a Firebase
+// custom token. Client uses signInWithCustomToken(token) to get a real Firebase
+// Auth session. PINs never leave the server after this point.
+//
+// Request:  { playerId: string, pin: string }
+// Response: { token: string }              on success
+//           throws HttpsError('not-found') if player missing
+//           throws HttpsError('permission-denied') if PIN wrong
+//           throws HttpsError('invalid-argument') if fields missing
+// ─────────────────────────────────────────────────────────────────────────────
+exports.verifyPin = onCall(
+  { region: 'australia-southeast1' },
+  async (request) => {
+    const { playerId, pin } = request.data
+
+    if (!playerId || !pin) {
+      throw new Error('invalid-argument: playerId and pin are required')
+    }
+
+    const db = admin.firestore()
+    const playerSnap = await db.collection('players').doc(playerId).get()
+
+    if (!playerSnap.exists) {
+      throw new HttpsError('not-found', 'Player not found')
+    }
+
+    const player = playerSnap.data()
+
+    if (player.pin !== pin) {
+      throw new HttpsError('permission-denied', 'Incorrect PIN')
+    }
+
+    // Issue a custom token with player metadata as claims
+    const token = await admin.auth().createCustomToken(playerId, {
+      role: player.role ?? 'player',
+      team: player.team ?? null,
+    })
+
+    return { token }
   }
 )
