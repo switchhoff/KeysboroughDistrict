@@ -4,6 +4,7 @@ const functions = require('firebase-functions')
 const { defineSecret } = require('firebase-functions/params')
 const admin = require('firebase-admin')
 const webpush = require('web-push')
+const crypto = require('crypto')
 
 admin.initializeApp()
 
@@ -327,16 +328,49 @@ exports.sendTeamNotification = onCall(
   }
 )
 
-// ── verifyPin ─────────────────────────────────────────────────────────────────
-// Callable function: verifies a player's PIN server-side and returns a Firebase
-// custom token. Client uses signInWithCustomToken(token) to get a real Firebase
-// Auth session. PINs never leave the server after this point.
+// ── PIN helpers ───────────────────────────────────────────────────────────────
+const hashPin = (pin) => crypto.createHash('sha256').update(pin).digest('hex')
+
+// ── setPin ────────────────────────────────────────────────────────────────────
+// Sets (or resets) a player's PIN. Stores only the SHA-256 hash in the
+// restricted /playerPins collection — raw PIN never persists anywhere.
 //
 // Request:  { playerId: string, pin: string }
-// Response: { token: string }              on success
-//           throws HttpsError('not-found') if player missing
-//           throws HttpsError('permission-denied') if PIN wrong
-//           throws HttpsError('invalid-argument') if fields missing
+// Response: {}
+// ─────────────────────────────────────────────────────────────────────────────
+exports.setPin = onCall(
+  { region: 'australia-southeast1' },
+  async (request) => {
+    const { playerId, pin } = request.data
+    if (!playerId || !pin) {
+      throw new HttpsError('invalid-argument', 'playerId and pin are required')
+    }
+
+    const db = admin.firestore()
+    const playerSnap = await db.collection('players').doc(playerId).get()
+    if (!playerSnap.exists) {
+      throw new HttpsError('not-found', 'Player not found')
+    }
+
+    // Reject if player already has a PIN set — use verifyPin + a change flow instead
+    const existing = await db.collection('playerPins').doc(playerId).get()
+    if (existing.exists) {
+      throw new HttpsError('already-exists', 'PIN already set — use change PIN flow')
+    }
+
+    await db.collection('playerPins').doc(playerId).set({ pinHash: hashPin(pin) })
+    // Set a flag on the player doc so clients know a PIN exists (without exposing the PIN)
+    await db.collection('players').doc(playerId).update({ hasPin: true })
+    return {}
+  }
+)
+
+// ── verifyPin ─────────────────────────────────────────────────────────────────
+// Verifies a player's PIN against the stored SHA-256 hash in /playerPins.
+// Raw PIN is never stored or returned. /playerPins is inaccessible to clients.
+//
+// Request:  { playerId: string, pin: string }
+// Response: { token: string }
 // ─────────────────────────────────────────────────────────────────────────────
 exports.verifyPin = onCall(
   { region: 'australia-southeast1' },
@@ -348,21 +382,22 @@ exports.verifyPin = onCall(
     }
 
     const db = admin.firestore()
-    const playerSnap = await db.collection('players').doc(playerId).get()
+    const [playerSnap, pinSnap] = await Promise.all([
+      db.collection('players').doc(playerId).get(),
+      db.collection('playerPins').doc(playerId).get(),
+    ])
 
     if (!playerSnap.exists) {
       throw new HttpsError('not-found', 'Player not found')
     }
-
-    const player = playerSnap.data()
-
-    if (player.pin !== pin) {
+    if (!pinSnap.exists) {
+      throw new HttpsError('not-found', 'PIN not set')
+    }
+    if (pinSnap.data().pinHash !== hashPin(pin)) {
       throw new HttpsError('permission-denied', 'Incorrect PIN')
     }
 
-    // Issue a custom token with player metadata as claims.
-    // Requires the function's service account to have the
-    // "Service Account Token Creator" role in GCP IAM.
+    const player = playerSnap.data()
     let token
     try {
       token = await admin.auth().createCustomToken(playerId, {
@@ -371,12 +406,117 @@ exports.verifyPin = onCall(
       })
     } catch (err) {
       console.error('createCustomToken failed:', err)
-      throw new HttpsError(
-        'internal',
-        'Token creation failed. Ensure the service account has the "Service Account Token Creator" IAM role. Detail: ' + err.message
-      )
+      throw new HttpsError('internal', 'Token creation failed: ' + err.message)
     }
 
     return { token }
+  }
+)
+
+// ── setFanPin ─────────────────────────────────────────────────────────────────
+exports.setFanPin = onCall(
+  { region: 'australia-southeast1' },
+  async (request) => {
+    const { fanId, pin } = request.data
+    if (!fanId || !pin) throw new HttpsError('invalid-argument', 'fanId and pin are required')
+
+    const db = admin.firestore()
+    const fanSnap = await db.collection('fans').doc(fanId).get()
+    if (!fanSnap.exists) throw new HttpsError('not-found', 'Fan not found')
+
+    const existing = await db.collection('fanPins').doc(fanId).get()
+    if (existing.exists) throw new HttpsError('already-exists', 'PIN already set')
+
+    await db.collection('fanPins').doc(fanId).set({ pinHash: hashPin(pin) })
+    await db.collection('fans').doc(fanId).update({ hasPin: true, pin: admin.firestore.FieldValue.delete() })
+    return {}
+  }
+)
+
+// ── verifyFanPin ──────────────────────────────────────────────────────────────
+exports.verifyFanPin = onCall(
+  { region: 'australia-southeast1' },
+  async (request) => {
+    const { fanId, pin } = request.data
+    if (!fanId || !pin) throw new HttpsError('invalid-argument', 'fanId and pin are required')
+
+    const db = admin.firestore()
+    const [fanSnap, pinSnap] = await Promise.all([
+      db.collection('fans').doc(fanId).get(),
+      db.collection('fanPins').doc(fanId).get(),
+    ])
+
+    if (!fanSnap.exists) throw new HttpsError('not-found', 'Fan not found')
+    if (!pinSnap.exists) throw new HttpsError('not-found', 'PIN not set')
+    if (pinSnap.data().pinHash !== hashPin(pin)) throw new HttpsError('permission-denied', 'Incorrect PIN')
+
+    return {}
+  }
+)
+
+// ── resetPin ──────────────────────────────────────────────────────────────────
+// Clears a player's PIN so they can set a new one on next login.
+// Two allowed callers:
+//   1. Admin: pass adminPlayerId + adminPin (role=admin verified server-side)
+//   2. Self change-PIN flow: pass playerId == callerPlayerId + callerPin (own PIN verified)
+exports.resetPin = onCall(
+  { region: 'australia-southeast1' },
+  async (request) => {
+    const { playerId, adminPlayerId, adminPin, callerPin } = request.data
+    if (!playerId) throw new HttpsError('invalid-argument', 'playerId is required')
+
+    const db = admin.firestore()
+
+    if (adminPlayerId && adminPin) {
+      // Admin path: verify the admin's PIN and check role=admin
+      const [adminSnap, adminPinSnap] = await Promise.all([
+        db.collection('players').doc(adminPlayerId).get(),
+        db.collection('playerPins').doc(adminPlayerId).get(),
+      ])
+      if (!adminSnap.exists) throw new HttpsError('not-found', 'Admin player not found')
+      if (adminSnap.data().role !== 'admin') throw new HttpsError('permission-denied', 'Not an admin')
+      if (!adminPinSnap.exists || adminPinSnap.data().pinHash !== hashPin(adminPin)) {
+        throw new HttpsError('permission-denied', 'Admin PIN incorrect')
+      }
+    } else if (callerPin) {
+      // Self path: caller must prove they own this playerId by supplying their current PIN
+      if (playerId !== request.data.playerId) throw new HttpsError('permission-denied', 'Forbidden')
+      const pinSnap = await db.collection('playerPins').doc(playerId).get()
+      if (!pinSnap.exists || pinSnap.data().pinHash !== hashPin(callerPin)) {
+        throw new HttpsError('permission-denied', 'Current PIN incorrect')
+      }
+    } else {
+      throw new HttpsError('permission-denied', 'Authorization required')
+    }
+
+    await db.collection('playerPins').doc(playerId).delete()
+    await db.collection('players').doc(playerId).update({ hasPin: false })
+    return {}
+  }
+)
+
+// ── resetFanPin ───────────────────────────────────────────────────────────────
+// Admin-triggered: clears a fan's PIN. Requires admin credentials.
+exports.resetFanPin = onCall(
+  { region: 'australia-southeast1' },
+  async (request) => {
+    const { fanId, adminPlayerId, adminPin } = request.data
+    if (!fanId) throw new HttpsError('invalid-argument', 'fanId is required')
+    if (!adminPlayerId || !adminPin) throw new HttpsError('permission-denied', 'Admin credentials required')
+
+    const db = admin.firestore()
+    const [adminSnap, adminPinSnap] = await Promise.all([
+      db.collection('players').doc(adminPlayerId).get(),
+      db.collection('playerPins').doc(adminPlayerId).get(),
+    ])
+    if (!adminSnap.exists) throw new HttpsError('not-found', 'Admin player not found')
+    if (adminSnap.data().role !== 'admin') throw new HttpsError('permission-denied', 'Not an admin')
+    if (!adminPinSnap.exists || adminPinSnap.data().pinHash !== hashPin(adminPin)) {
+      throw new HttpsError('permission-denied', 'Admin PIN incorrect')
+    }
+
+    await db.collection('fanPins').doc(fanId).delete()
+    await db.collection('fans').doc(fanId).update({ hasPin: false })
+    return {}
   }
 )

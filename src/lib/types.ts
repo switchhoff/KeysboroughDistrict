@@ -3,7 +3,8 @@ export type Team = 'reserves' | 'seniors'
 export interface Player {
   id: string
   name: string
-  pin: string
+  pin?: string      // legacy — removed after migration, use hasPin instead
+  hasPin?: boolean  // set by setPin/migrate, safe to expose to clients
   role: 'admin' | 'player' | 'coach'
   pushSubscription?: object // Web Push PushSubscription JSON
 }
