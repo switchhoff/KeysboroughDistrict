@@ -1,6 +1,7 @@
 'use client'
 
 import Image from 'next/image'
+import { QRCodeSVG } from 'qrcode.react'
 
 const FANS_URL = 'https://keysborough-district-fans.web.app'
 
@@ -67,7 +68,13 @@ export default function FanGuidePage() {
           <div className="flex flex-col items-center py-1">
             <div className="relative inline-block">
               <div className="p-2 border-2 border-club-red/20 rounded-xl bg-white">
-                <Image src="/QRKDFC.png" alt="QR Code" width={290} height={290} />
+                <QRCodeSVG
+                  value={FANS_URL}
+                  size={290}
+                  fgColor="#c01e1e"
+                  bgColor="#ffffff"
+                  level="M"
+                />
               </div>
               {/* Cartoon arrow + label */}
               <div className="absolute -left-20 top-1/2 -translate-y-1/2 flex items-center gap-1">

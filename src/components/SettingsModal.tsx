@@ -8,9 +8,10 @@ import {
 } from 'lucide-react'
 import {
   collection, addDoc, onSnapshot, query,
-  where, orderBy, updateDoc, doc, getDoc,
+  where, orderBy, updateDoc, doc,
 } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+import { db, functions } from '@/lib/firebase'
+import { httpsCallable } from 'firebase/functions'
 import { AuthState, SupportRequest, SupportMessage } from '@/lib/types'
 
 type View = 'menu' | 'pin' | 'support' | 'chat'
@@ -119,16 +120,23 @@ export default function SettingsModal({ auth, onClose }: Props) {
     if (!auth) return
     setPinError(''); setPinSaving(true)
     try {
-      const snap = await getDoc(doc(db, 'players', auth.playerId))
-      if (!snap.exists()) { setPinError('Account not found.'); return }
-      const player = snap.data()
-      if (player.pin !== oldPin)  { setPinError('Current PIN is incorrect.'); return }
-      if (newPin.length < 4)      { setPinError('New PIN must be at least 4 digits.'); return }
-      if (newPin !== confirmPin)  { setPinError("PINs don't match."); return }
-      await updateDoc(doc(db, 'players', auth.playerId), { pin: newPin })
+      if (newPin.length < 4)     { setPinError('New PIN must be at least 4 digits.'); return }
+      if (newPin !== confirmPin) { setPinError("PINs don't match."); return }
+      // Verify old PIN server-side
+      try {
+        await httpsCallable(functions, 'verifyPin')({ playerId: auth.playerId, pin: oldPin })
+      } catch {
+        setPinError('Current PIN is incorrect.')
+        return
+      }
+      // Reset (self-auth via callerPin) then set new PIN
+      await httpsCallable(functions, 'resetPin')({ playerId: auth.playerId, callerPin: oldPin })
+      await httpsCallable(functions, 'setPin')({ playerId: auth.playerId, pin: newPin })
       setPinSuccess(true)
       setOldPin(''); setNewPin(''); setConfirmPin('')
       setTimeout(() => { onClose(); router.replace('/') }, 2000)
+    } catch {
+      setPinError('Something went wrong.')
     } finally { setPinSaving(false) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth, oldPin, newPin, confirmPin])

@@ -6,7 +6,12 @@ service cloud.firestore {
     match /players/{playerId} {
       allow read: if true;
       allow create, delete: if true;
-      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pin', 'pushSubscription']);
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pushSubscription']);
+    }
+
+    // ── Player PINs (hashed) — server-side Admin SDK only ─────────────────────
+    match /playerPins/{playerId} {
+      allow read, write: if false;
     }
 
     // ── Rounds + subcollections ───────────────────────────────────────────────
@@ -91,11 +96,16 @@ service cloud.firestore {
       }
     }
 
+    // ── Fan PINs (hashed) — server-side Admin SDK only ───────────────────────
+    match /fanPins/{fanId} {
+      allow read, write: if false;
+    }
+
     // ── Fans ─────────────────────────────────────────────────────────────────
     match /fans/{fanId} {
       allow read: if true;
       allow create: if true;
-      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pin', 'fanPushSubscription', 'notificationSettings']);
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fanPushSubscription', 'notificationSettings']);
       allow delete: if false;
     }
   }

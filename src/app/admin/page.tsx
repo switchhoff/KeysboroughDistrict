@@ -1105,14 +1105,37 @@ export default function AdminPage() {
                           {player.role === 'coach' && (
                             <span className="text-xs bg-club-green/10 text-club-green font-semibold px-1.5 py-0.5 rounded">Coach</span>
                           )}
-                          {!player.pin && (
+                          {!player.pin && !player.hasPin && (
                             <span className="text-xs bg-amber-50 text-amber-600 font-semibold px-1.5 py-0.5 rounded">No PIN yet</span>
                           )}
                         </div>
                       </div>
-                      <button onClick={() => handleDeletePlayer(player)} className="p-2 text-gray-300 hover:text-red-400 transition-colors">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={async () => {
+                            if (!confirm(`Reset PIN for ${player.name}? They will need to set a new PIN on next login.`)) return
+                            const adminPin = prompt('Enter your admin PIN to confirm:')
+                            if (!adminPin) return
+                            try {
+                              await httpsCallable(functions, 'resetPin')({
+                                playerId: player.id,
+                                adminPlayerId: auth!.playerId,
+                                adminPin,
+                              })
+                              alert(`PIN reset for ${player.name}`)
+                            } catch (e: any) {
+                              alert('Error: ' + (e.message ?? 'Failed'))
+                            }
+                          }}
+                          className="px-2 py-1 text-xs font-medium text-amber-600 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors"
+                          title="Reset PIN"
+                        >
+                          Reset PIN
+                        </button>
+                        <button onClick={() => handleDeletePlayer(player)} className="p-2 text-gray-300 hover:text-red-400 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

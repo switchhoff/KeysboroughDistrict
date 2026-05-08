@@ -88,7 +88,8 @@ export interface NotificationSettings {
 export interface Fan {
   id: string
   name: string
-  pin: string
+  pin?: string      // legacy — removed after migration, use hasPin instead
+  hasPin?: boolean  // set by setFanPin/migrate, safe to expose to clients
   createdAt: number
   fanPushSubscription?: any
   notificationSettings?: NotificationSettings

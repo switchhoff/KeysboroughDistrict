@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+import { collection, getDocs } from 'firebase/firestore'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '@/lib/firebase'
 import { Player } from '@/lib/types'
 import { storeAuth, generateAuthToken, getStoredAuth } from '@/lib/auth'
 import { registerPush } from '@/lib/push'
@@ -48,7 +49,7 @@ export default function LoginPage() {
   const handleSelectPlayer = (player: Player) => {
     setSelected(player)
     setSearch(player.name)
-    setIsNewPlayer(!player.pin)
+    setIsNewPlayer(!player.pin && !player.hasPin)
     setPin('')
   }
 
@@ -57,21 +58,29 @@ export default function LoginPage() {
     if (!selected || pin.length !== 4) return
     setSubmitting(true)
     try {
-      if (selected.pin && selected.pin !== pin) {
-        setToast({ message: 'Incorrect PIN. Try again.', type: 'error' })
-        setPin('')
-        setSubmitting(false)
-        return
-      }
-      if (!selected.pin) {
-        await updateDoc(doc(db, 'players', selected.id), { pin })
+      if (isNewPlayer) {
+        // New player — set PIN via Cloud Function (hashes server-side, stores in /playerPins)
+        const setPin = httpsCallable(functions, 'setPin')
+        await setPin({ playerId: selected.id, pin })
+      } else {
+        // Existing player — verify PIN server-side against stored hash
+        const verifyPin = httpsCallable(functions, 'verifyPin')
+        await verifyPin({ playerId: selected.id, pin })
       }
       const token = generateAuthToken(selected.id, pin)
       storeAuth({ playerId: selected.id, authToken: token, name: selected.name, role: selected.role })
       registerPush(selected.id)
       router.replace('/')
-    } catch {
-      setToast({ message: 'Something went wrong. Try again.', type: 'error' })
+    } catch (err: unknown) {
+      console.error('[login] verifyPin error:', err)
+      const code = (err as { code?: string }).code
+      console.log('[login] error code:', code)
+      if (code === 'functions/permission-denied') {
+        setToast({ message: 'Incorrect PIN. Try again.', type: 'error' })
+        setPin('')
+      } else {
+        setToast({ message: 'Something went wrong. Try again.', type: 'error' })
+      }
     } finally {
       setSubmitting(false)
     }

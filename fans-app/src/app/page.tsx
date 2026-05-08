@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { collection, getDocs, doc, getDoc, addDoc, updateDoc, orderBy, query } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+import { collection, getDocs, doc, addDoc, orderBy, query } from 'firebase/firestore'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '@/lib/firebase'
 import { Fan, FanAuthState } from '@/lib/types'
 import { storeFanAuth, getStoredFanAuth } from '@/lib/fanAuth'
 import { getPushState, subscribeToPush } from '@/lib/pushNotifications'
@@ -104,7 +105,7 @@ export default function FansPage() {
     const { lockedUntil } = getLockout(fan.id)
     if (lockedUntil > Date.now()) startCountdown(lockedUntil)
     else setLockedSecsLeft(0)
-    if (!fan.pin) {
+    if (!fan.pin && !fan.hasPin) {
       resetSetPin()
       setView('set-pin')
     } else {
@@ -122,29 +123,30 @@ export default function FansPage() {
     setSubmitting(true)
     setError('')
     try {
-      const snap = await getDoc(doc(db, 'fans', selectedFan.id))
-      if (!snap.exists()) { setError('Fan not found.'); return }
-      const fan = snap.data() as Fan
+      const verifyFanPin = httpsCallable(functions, 'verifyFanPin')
+      await verifyFanPin({ fanId: selectedFan.id, pin })
 
-      if (fan.pin !== pin) {
+      clearLockout(selectedFan.id)
+      const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name }
+      goAfterAuth(selectedFan.id, auth)
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code
+      if (code === 'functions/permission-denied') {
         const attempts = (lockout.attempts ?? 0) + 1
         const remaining = MAX_ATTEMPTS - attempts
         if (attempts >= MAX_ATTEMPTS) {
           const lockedUntil = Date.now() + LOCKOUT_MS
           setLockout(selectedFan.id, attempts, lockedUntil)
           startCountdown(lockedUntil)
-          setError(`Too many attempts. Try again in 5 minutes.`)
+          setError('Too many attempts. Try again in 5 minutes.')
         } else {
           setLockout(selectedFan.id, attempts, 0)
           setError(`Incorrect PIN. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`)
         }
         setPin('')
-        return
+      } else {
+        setError('Something went wrong. Try again.')
       }
-
-      clearLockout(selectedFan.id)
-      const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name }
-      goAfterAuth(selectedFan.id, auth)
     } finally {
       setSubmitting(false)
     }
@@ -157,9 +159,12 @@ export default function FansPage() {
     setSubmitting(true)
     setError('')
     try {
-      await updateDoc(doc(db, 'fans', selectedFan.id), { pin: newPin })
+      const setFanPin = httpsCallable(functions, 'setFanPin')
+      await setFanPin({ fanId: selectedFan.id, pin: newPin })
       const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name }
       goAfterAuth(selectedFan.id, auth)
+    } catch {
+      setError('Something went wrong. Try again.')
     } finally {
       setSubmitting(false)
     }
@@ -172,13 +177,17 @@ export default function FansPage() {
     setSubmitting(true)
     setError('')
     try {
+      // Create fan doc without PIN — setFanPin stores only the hash
       const ref = await addDoc(collection(db, 'fans'), {
         name: newName.trim(),
-        pin: newPin,
         createdAt: Date.now(),
       })
+      const setFanPin = httpsCallable(functions, 'setFanPin')
+      await setFanPin({ fanId: ref.id, pin: newPin })
       const auth: FanAuthState = { fanId: ref.id, fanName: newName.trim() }
       goAfterAuth(ref.id, auth)
+    } catch {
+      setError('Something went wrong. Try again.')
     } finally {
       setSubmitting(false)
     }
