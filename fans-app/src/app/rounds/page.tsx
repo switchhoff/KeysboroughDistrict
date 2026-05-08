@@ -42,11 +42,15 @@ function Countdown({ targetDate }: { targetDate: Date }) {
         return
       }
 
+      const d = Math.floor(distance / (1000 * 60 * 60 * 24))
       const h = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
       const m = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60))
       const s = Math.floor((distance % (1000 * 60)) / 1000)
 
-      setTimeLeft(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`)
+      const timeStr = d > 0
+        ? `${d}d ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+        : `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+      setTimeLeft(timeStr)
     }, 1000)
 
     return () => clearInterval(timer)
