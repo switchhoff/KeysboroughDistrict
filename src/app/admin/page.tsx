@@ -5,15 +5,16 @@ import { collection, collectionGroup, getDocs, doc, setDoc, updateDoc, deleteDoc
 import { db, functions } from '@/lib/firebase'
 import { httpsCallable } from 'firebase/functions'
 import { useAuth } from '@/lib/auth'
-import { Player, Round, Vote, Team, PlayerStat, SupportRequest, SupportMessage } from '@/lib/types'
+import { Player, Round, Vote, Team, PlayerStat, SupportRequest, SupportMessage, LeagueMatch, LadderEntry } from '@/lib/types'
+import { computeLadder } from '@/lib/ladder'
 import { voteUnlockTime } from '@/lib/voteUnlock'
 import { useRouter } from 'next/navigation'
 import Header from '@/components/Header'
 import Toast from '@/components/Toast'
-import { ChevronDown, Loader2, Plus, Calendar, Users, Trophy, AlertTriangle, UserPlus, Trash2, Target, Pencil, Check, X, Zap, MessageSquare, MapPin, QrCode, ExternalLink } from 'lucide-react'
+import { ChevronDown, Loader2, Plus, Calendar, Users, Trophy, AlertTriangle, UserPlus, Trash2, Target, Pencil, Check, X, Zap, MessageSquare, MapPin, QrCode, ExternalLink, BarChart2 } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 
-type Tab = 'leaderboard' | 'shame' | 'teamsheet' | 'players' | 'setup' | 'stats' | 'support' | 'fanzone'
+type Tab = 'leaderboard' | 'shame' | 'teamsheet' | 'players' | 'setup' | 'stats' | 'support' | 'fanzone' | 'ladder'
 
 const TEAM_LABEL: Record<Team, string> = { reserves: 'Reserves', seniors: 'Seniors' }
 
@@ -30,6 +31,268 @@ interface LeaderboardEntry {
   threes: number
   twos: number
   ones: number
+}
+
+// ── Admin Ladder Tab ──────────────────────────────────────────────────────────
+function AdminLadderTab() {
+  const [matches,     setMatches]     = useState<LeagueMatch[]>([])
+  const [loading,     setLoading]     = useState(true)
+  const [competition, setCompetition] = useState<'seniors' | 'reserves'>('seniors')
+
+  // Team roster state
+  const [teams,       setTeams]       = useState<string[]>([])
+  const [newTeam,     setNewTeam]     = useState('')
+  const [addingTeam,  setAddingTeam]  = useState(false)
+
+  // Round filter for results log
+  const [roundFilter, setRoundFilter] = useState<string>('all')
+
+  // Add-result form
+  const [fRound,      setFRound]      = useState('')
+  const [fDate,       setFDate]       = useState('')
+  const [fHome,       setFHome]       = useState('')
+  const [fHomeScore,  setFHomeScore]  = useState('')
+  const [fAway,       setFAway]       = useState('')
+  const [fAwayScore,  setFAwayScore]  = useState('')
+  const [saving,      setSaving]      = useState(false)
+
+  // Load matches
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, 'leagueMatches'), orderBy('round', 'asc')),
+      snap => {
+        setMatches(snap.docs.map(d => ({ id: d.id, ...d.data() } as LeagueMatch)))
+        setLoading(false)
+      }
+    )
+    return unsub
+  }, [])
+
+  // Load team roster from Firestore (single doc for simplicity)
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'ladderConfig', 'teams'), snap => {
+      if (snap.exists()) setTeams((snap.data().list as string[]) ?? [])
+    })
+    return unsub
+  }, [])
+
+  const saveTeams = (updated: string[]) =>
+    setDoc(doc(db, 'ladderConfig', 'teams'), { list: updated })
+
+  const addTeam = async () => {
+    const name = newTeam.trim()
+    if (!name || teams.includes(name)) return
+    setAddingTeam(true)
+    const updated = [...teams, name].sort()
+    await saveTeams(updated)
+    setTeams(updated)
+    setNewTeam('')
+    setAddingTeam(false)
+  }
+
+  const removeTeam = (name: string) => {
+    const updated = teams.filter(t => t !== name)
+    saveTeams(updated)
+    setTeams(updated)
+  }
+
+  const addMatch = async () => {
+    if (!fRound || !fHome || !fAway || fHomeScore === '' || fAwayScore === '') return
+    setSaving(true)
+    try {
+      await addDoc(collection(db, 'leagueMatches'), {
+        round: parseInt(fRound), date: fDate || '',
+        homeTeam: fHome, awayTeam: fAway,
+        homeScore: parseInt(fHomeScore), awayScore: parseInt(fAwayScore),
+        competition,
+      })
+      setFHomeScore(''); setFAwayScore(''); setFHome(''); setFAway('')
+      // keep round + date so admin can quickly add next game in same round
+    } finally { setSaving(false) }
+  }
+
+  const ladder: LadderEntry[] = loading ? [] : computeLadder(matches, competition)
+  const formColor = (r: 'W'|'D'|'L') =>
+    r === 'W' ? 'bg-green-500' : r === 'D' ? 'bg-amber-400' : 'bg-red-500'
+
+  const competitionMatches = matches
+    .filter(m => m.competition === competition)
+    .sort((a, b) => b.round - a.round)
+
+  const rounds = Array.from(new Set(competitionMatches.map(m => m.round))).sort((a,b) => b - a)
+
+  const visibleMatches = roundFilter === 'all'
+    ? competitionMatches
+    : competitionMatches.filter(m => m.round === parseInt(roundFilter))
+
+  const selectCls = 'w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-club-red/30'
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="font-black text-gray-900 text-base">Ladder</h2>
+        <p className="text-sm text-gray-400 mt-0.5">Manage teams, enter results, and track the season ladder.</p>
+      </div>
+
+      {/* Competition toggle */}
+      <div className="flex rounded-xl overflow-hidden border border-gray-200 text-sm font-semibold">
+        {(['seniors', 'reserves'] as const).map(c => (
+          <button key={c} onClick={() => setCompetition(c)}
+            className={`flex-1 py-2.5 transition-colors ${competition === c ? 'bg-club-red text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
+            {c === 'seniors' ? 'Seniors' : 'Reserves'}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Team Roster ── */}
+      <div className="bg-white border border-gray-100 rounded-2xl p-4 space-y-3">
+        <div className="font-semibold text-gray-900 text-sm">League Teams</div>
+        {teams.length === 0
+          ? <p className="text-xs text-gray-400">No teams yet — add all clubs in the competition.</p>
+          : (
+            <div className="flex flex-wrap gap-2">
+              {teams.map(t => (
+                <span key={t} className="flex items-center gap-1.5 bg-gray-100 text-gray-700 text-xs font-semibold px-2.5 py-1 rounded-full">
+                  {t}
+                  <button onClick={() => removeTeam(t)} className="text-gray-400 hover:text-red-400 transition-colors">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )
+        }
+        <div className="flex gap-2">
+          <input
+            className="input-field flex-1"
+            placeholder="Add team name…"
+            value={newTeam}
+            onChange={e => setNewTeam(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addTeam()}
+          />
+          <button onClick={addTeam} disabled={addingTeam || !newTeam.trim()}
+            className="bg-club-red text-white font-bold px-4 rounded-xl hover:bg-club-red/90 disabled:opacity-40 transition-colors flex items-center gap-1">
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Add Result Form ── */}
+      <div className="bg-white border border-gray-100 rounded-2xl p-4 space-y-3">
+        <div className="font-semibold text-gray-900 text-sm flex items-center gap-2">
+          <Plus className="w-4 h-4 text-club-red" /> Add Result
+        </div>
+
+        {/* Round + Date */}
+        <div className="grid grid-cols-2 gap-2">
+          <input className="input-field" placeholder="Round #" type="number" value={fRound} onChange={e => setFRound(e.target.value)} />
+          <input className="input-field" type="date" value={fDate} onChange={e => setFDate(e.target.value)} />
+        </div>
+
+        {/* Home team + score */}
+        <div className="grid grid-cols-[1fr_3rem] gap-2 items-center">
+          <select className={selectCls} value={fHome} onChange={e => setFHome(e.target.value)}>
+            <option value="">Home Team…</option>
+            {teams.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <input className="input-field text-center px-1 font-bold" placeholder="0" type="number" min="0" value={fHomeScore} onChange={e => setFHomeScore(e.target.value)} />
+        </div>
+
+        {/* Away team + score */}
+        <div className="grid grid-cols-[1fr_3rem] gap-2 items-center">
+          <select className={selectCls} value={fAway} onChange={e => setFAway(e.target.value)}>
+            <option value="">Away Team…</option>
+            {teams.filter(t => t !== fHome).map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <input className="input-field text-center px-1 font-bold" placeholder="0" type="number" min="0" value={fAwayScore} onChange={e => setFAwayScore(e.target.value)} />
+        </div>
+
+        <button onClick={addMatch} disabled={saving || !fRound || !fHome || !fAway || fHomeScore === '' || fAwayScore === ''}
+          className="w-full bg-club-red text-white font-bold py-2.5 rounded-xl hover:bg-club-red/90 disabled:opacity-40 transition-colors flex items-center justify-center gap-2">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Add Result
+        </button>
+      </div>
+
+      {/* ── Live Ladder ── */}
+      {!loading && ladder.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Current Ladder</p>
+          <div className="overflow-x-auto -mx-1">
+            <table className="w-full text-sm min-w-[420px]">
+              <thead>
+                <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wide border-b border-gray-100">
+                  <th className="text-left pb-2 pl-2">#</th>
+                  <th className="text-left pb-2">Team</th>
+                  <th className="text-center pb-2 w-7">P</th>
+                  <th className="text-center pb-2 w-7">W</th>
+                  <th className="text-center pb-2 w-7">D</th>
+                  <th className="text-center pb-2 w-7">L</th>
+                  <th className="text-center pb-2 w-8">GF</th>
+                  <th className="text-center pb-2 w-8">GA</th>
+                  <th className="text-center pb-2 w-8">GD</th>
+                  <th className="text-center pb-2 w-8">Pts</th>
+                  <th className="text-center pb-2">Form</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ladder.map((row, i) => (
+                  <tr key={row.team} className={`border-b border-gray-50 ${row.team === 'Keysborough District FC' || row.team === 'KDFC' ? 'bg-club-red/5' : ''}`}>
+                    <td className="py-2 pl-2 text-gray-400 text-xs font-bold">{i + 1}</td>
+                    <td className="py-2 font-semibold text-gray-900 text-xs pr-2">{row.team}</td>
+                    <td className="py-2 text-center text-gray-600 text-xs">{row.played}</td>
+                    <td className="py-2 text-center font-bold text-green-600 text-xs">{row.won}</td>
+                    <td className="py-2 text-center text-gray-500 text-xs">{row.drawn}</td>
+                    <td className="py-2 text-center text-red-500 text-xs">{row.lost}</td>
+                    <td className="py-2 text-center text-gray-600 text-xs">{row.gf}</td>
+                    <td className="py-2 text-center text-gray-600 text-xs">{row.ga}</td>
+                    <td className={`py-2 text-center font-semibold text-xs ${row.gd > 0 ? 'text-green-600' : row.gd < 0 ? 'text-red-500' : 'text-gray-500'}`}>{row.gd > 0 ? '+' : ''}{row.gd}</td>
+                    <td className="py-2 text-center font-black text-gray-900 text-xs">{row.pts}</td>
+                    <td className="py-2">
+                      <div className="flex gap-0.5 justify-center">
+                        {row.form.map((r, fi) => (
+                          <span key={fi} className={`w-4 h-4 rounded-sm text-white text-[9px] font-black flex items-center justify-center ${formColor(r)}`}>{r}</span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Results Log ── */}
+      {competitionMatches.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Results</p>
+            <select
+              value={roundFilter}
+              onChange={e => setRoundFilter(e.target.value)}
+              className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs font-semibold text-gray-600 bg-white focus:outline-none"
+            >
+              <option value="all">All Rounds</option>
+              {rounds.map(r => <option key={r} value={r}>Round {r}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            {visibleMatches.map(m => (
+              <div key={m.id} className="bg-white border border-gray-100 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2">
+                <div className="text-xs text-gray-400 shrink-0">R{m.round}{m.date && ` · ${m.date}`}</div>
+                <div className="text-sm font-semibold text-gray-900 text-center flex-1">
+                  {m.homeTeam} <span className="font-black text-club-red">{m.homeScore}–{m.awayScore}</span> {m.awayTeam}
+                </div>
+                <button onClick={() => deleteDoc(doc(db, 'leagueMatches', m.id))} className="p-1 text-gray-300 hover:text-red-400 transition-colors shrink-0">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function AdminPage() {
@@ -503,6 +766,7 @@ export default function AdminPage() {
     { id: 'setup',       label: 'Rounds',      icon: Calendar },
     { id: 'support',     label: 'Support',     icon: MessageSquare, badge: supportUnread || undefined },
     { id: 'fanzone',     label: 'Fan Zone',    icon: QrCode },
+    { id: 'ladder',      label: 'Ladder',      icon: BarChart2 },
   ]
 
   if (!auth) return null
@@ -1634,6 +1898,11 @@ export default function AdminPage() {
                   </ul>
                 </div>
               </div>
+            )}
+
+            {/* ── LADDER TAB ── */}
+            {tab === 'ladder' && (
+              <AdminLadderTab />
             )}
 
       {noticeModal && (

@@ -180,6 +180,9 @@ exports.onGoalLogged = functions
   .document('rounds/{roundId}/goals/{goalId}')
   .onCreate(async (snap, context) => {
     const goal = snap.data()
+    // Silent flag — admin backdating after game, skip push notifications
+    if (goal.silent === true) return null
+
     const team = goal.team === 'seniors' ? 'Seniors' : 'Reserves'
     const type = goal.type  // undefined = goal (legacy), or kickoff/halftime/second_half/whistle
 

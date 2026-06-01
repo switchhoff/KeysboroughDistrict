@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense, useRef } from 'react'
 import { doc, getDoc, collection, onSnapshot, addDoc, deleteDoc, updateDoc, setDoc, query, orderBy } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { Round, Player, Team, FanVote } from '@/lib/types'
+import { Round, Player, Team, FanVote, FanAuthState } from '@/lib/types'
 import { getStoredFanAuth } from '@/lib/fanAuth'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
@@ -147,7 +147,7 @@ function FanRoundInner() {
 
   const [round,      setRound]      = useState<Round | null>(null)
   const [loading,    setLoading]    = useState(true)
-  const [fanAuth,    setFanAuth]    = useState<{ fanId: string; fanName: string } | null>(null)
+  const [fanAuth,    setFanAuth]    = useState<FanAuthState | null>(null)
   const [primaryTab, setPrimaryTab] = useState<PrimaryTab>('game')
   const [activeTeam, setActiveTeam] = useState<Team>('seniors')
 
@@ -165,6 +165,7 @@ function FanRoundInner() {
   const [goalScoredBy,     setGoalScoredBy]     = useState<'kdfc' | 'opponent'>('kdfc')
   const [goalPlayerNum,    setGoalPlayerNum]    = useState('')
   const [goalPlayerName,   setGoalPlayerName]   = useState('')
+  const [silentMode,           setSilentMode]           = useState(false)
   const [submittingGoal,       setSubmittingGoal]       = useState(false)
   const [duplicateWarning, setDuplicateWarning] = useState(false)
   const [submittingPhase,      setSubmittingPhase]      = useState<Team | null>(null)
@@ -258,11 +259,13 @@ function FanRoundInner() {
   // ── Actions ──────────────────────────────────────────────────────────────────
   const submitGoal = async () => {
     if (!fanAuth || submittingGoal) return
-    // Rate-limit: block if any goal was logged in the last 10 seconds
-    const recentGoal = goals.find(
-      g => (!g.type || g.type === 'goal') && g.team === goalTeam && Date.now() - g.timestamp < 10_000
-    )
-    if (recentGoal) { setDuplicateWarning(true); return }
+    // Rate-limit: block if any goal was logged in the last 10 seconds (skip for admin in silent mode)
+    if (!silentMode) {
+      const recentGoal = goals.find(
+        g => (!g.type || g.type === 'goal') && g.team === goalTeam && Date.now() - g.timestamp < 10_000
+      )
+      if (recentGoal) { setDuplicateWarning(true); return }
+    }
     setSubmittingGoal(true)
     try {
       await addDoc(collection(db, 'rounds', roundId, 'goals'), {
@@ -271,6 +274,7 @@ function FanRoundInner() {
         ...(goalScoredBy === 'kdfc' && goalPlayerNum.trim()  ? { playerNumber: goalPlayerNum.trim()  } : {}),
         ...(goalScoredBy === 'kdfc' && goalPlayerName.trim() ? { playerName:   goalPlayerName.trim() } : {}),
         timestamp: Date.now(),
+        ...(silentMode ? { silent: true } : {}),
       })
       setGoalPlayerNum(''); setGoalPlayerName(''); setAddingGoal(false)
     } finally { setSubmittingGoal(false) }
@@ -284,6 +288,7 @@ function FanRoundInner() {
     try {
       await addDoc(collection(db, 'rounds', roundId, 'goals'), {
         fanId: fanAuth.fanId, fanName: fanAuth.fanName, team, type, timestamp: Date.now(),
+        ...(silentMode ? { silent: true } : {}),
       })
     } finally { setSubmittingPhase(null) }
   }
@@ -505,9 +510,20 @@ function FanRoundInner() {
                   </h2>
                   <p className="text-sm text-gray-400">Live match events</p>
                 </div>
-                {!isFormOpen && gamePhase !== 'full_time' && (
+                {/* Admin silent-mode toggle */}
+                {fanAuth?.isAdmin && (
+                  <div className="flex items-center gap-2 mt-1">
+                    <button
+                      onClick={() => setSilentMode(s => !s)}
+                      className={`text-xs font-bold px-2.5 py-1 rounded-full border transition-colors ${silentMode ? 'bg-amber-100 text-amber-700 border-amber-300' : 'bg-gray-100 text-gray-400 border-gray-200'}`}
+                    >
+                      {silentMode ? '🔕 Silent' : '🔔 Live'}
+                    </button>
+                  </div>
+                )}
+                {!isFormOpen && (gamePhase !== 'full_time' || fanAuth?.isAdmin) && (
                   <div className="flex items-center gap-2">
-                    {(gamePhase === 'first_half' || gamePhase === 'second_half') && (
+                    {(gamePhase === 'first_half' || gamePhase === 'second_half' || fanAuth?.isAdmin) && (
                       <button
                         onClick={() => { setGoalTeam(activeTeam); setGoalScoredBy('kdfc'); setGoalPlayerNum(''); setGoalPlayerName(''); setAddingGoal(true) }}
                         className={`flex items-center gap-1 text-xs font-bold ${accent.text} ${accent.bg} ${accent.hover} px-3 py-1.5 rounded-full transition-colors`}

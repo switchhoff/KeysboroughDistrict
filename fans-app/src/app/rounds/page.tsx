@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react'
 import { collection, getDocs, onSnapshot, orderBy, query } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { Round, Player, Team } from '@/lib/types'
+import { Round, Player, Team, LeagueMatch, LadderEntry } from '@/lib/types'
+import { computeLadder } from '@/lib/ladder'
 import { getStoredFanAuth } from '@/lib/fanAuth'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -65,7 +66,7 @@ function Countdown({ targetDate }: { targetDate: Date }) {
   )
 }
 
-type RoundTab = 'upcoming' | 'completed' | 'stats'
+type RoundTab = 'upcoming' | 'completed' | 'stats' | 'ladder'
 type StatFilter = 'all' | 'goals' | 'assists'
 
 const TEAM_LABEL: Record<Team, string> = { reserves: 'Reserves', seniors: 'Seniors' }
@@ -103,7 +104,7 @@ function StatsPanel({ rounds, players, loading }: { rounds: Round[]; players: Pl
       return entries.filter(e => e.assists > 0).sort((a, b) => b.assists - a.assists)
     return entries
       .filter(e => e.goals > 0 || e.assists > 0)
-      .sort((a, b) => b.goals - a.goals || b.assists - a.assists)
+      .sort((a, b) => (b.goals + b.assists) - (a.goals + a.assists) || b.goals - a.goals)
   })()
 
   if (loading) return (
@@ -150,24 +151,109 @@ function StatsPanel({ rounds, players, loading }: { rounds: Round[]; players: Pl
           </div>
         ) : (
           <div className="space-y-2">
-            <div className={`grid gap-3 px-4 pb-1 ${filter === 'all' ? 'grid-cols-[2.25rem_1fr_3.5rem_3.5rem]' : 'grid-cols-[2.25rem_1fr_3.5rem]'}`}>
+            <div className={`grid gap-3 px-4 pb-1 ${filter === 'all' ? 'grid-cols-[2.25rem_1fr_3.5rem_3.5rem_3.5rem]' : 'grid-cols-[2.25rem_1fr_3.5rem]'}`}>
               <div />
               <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Player</div>
               {filter !== 'assists' && <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-center">Goals</div>}
               {filter !== 'goals'   && <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-center">{filter === 'all' ? 'Asts' : 'Assists'}</div>}
+              {filter === 'all'     && <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide text-center">Total</div>}
             </div>
             {board.map((entry, i) => (
               <div key={entry.player.id}
-                className={`bg-white rounded-2xl border border-gray-100 p-4 grid gap-3 items-center ${filter === 'all' ? 'grid-cols-[2.25rem_1fr_3.5rem_3.5rem]' : 'grid-cols-[2.25rem_1fr_3.5rem]'}`}>
+                className={`bg-white rounded-2xl border border-gray-100 p-4 grid gap-3 items-center ${filter === 'all' ? 'grid-cols-[2.25rem_1fr_3.5rem_3.5rem_3.5rem]' : 'grid-cols-[2.25rem_1fr_3.5rem]'}`}>
                 <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-sm shrink-0 ${rankBg(i)}`}>{i + 1}</div>
                 <div className="font-bold text-gray-900 truncate">{entry.player.name}</div>
                 {filter !== 'assists' && <div className="text-xl font-black text-club-red text-center">{entry.goals}</div>}
                 {filter !== 'goals'   && <div className="text-xl font-black text-club-green text-center">{entry.assists}</div>}
+                {filter === 'all'     && <div className="text-xl font-black text-gray-900 text-center">{entry.goals + entry.assists}</div>}
               </div>
             ))}
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Fan Ladder Panel ──────────────────────────────────────────────────────────
+function FanLadderPanel() {
+  const [competition, setCompetition] = useState<'seniors' | 'reserves'>('seniors')
+  const [matches, setMatches] = useState<LeagueMatch[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, 'leagueMatches'), orderBy('round', 'asc')),
+      snap => {
+        setMatches(snap.docs.map(d => ({ id: d.id, ...d.data() } as LeagueMatch)))
+        setLoading(false)
+      }
+    )
+    return unsub
+  }, [])
+
+  const ladder: LadderEntry[] = loading ? [] : computeLadder(matches, competition)
+  const formColor = (r: 'W'|'D'|'L') =>
+    r === 'W' ? 'bg-green-500' : r === 'D' ? 'bg-amber-400' : 'bg-red-500'
+
+  if (loading) return <div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-club-red" /></div>
+
+  return (
+    <div className="space-y-4 pt-2">
+      <div className="flex rounded-xl overflow-hidden border border-gray-200 text-sm font-semibold">
+        {(['seniors', 'reserves'] as const).map(c => (
+          <button key={c} onClick={() => setCompetition(c)}
+            className={`flex-1 py-2.5 transition-colors ${competition === c ? 'bg-club-red text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}>
+            {c === 'seniors' ? 'Seniors' : 'Reserves'}
+          </button>
+        ))}
+      </div>
+      {ladder.length === 0 ? (
+        <p className="text-center text-gray-400 text-sm py-10">No ladder data yet.</p>
+      ) : (
+        <div className="overflow-x-auto -mx-1">
+          <table className="w-full text-sm min-w-[420px]">
+            <thead>
+              <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wide border-b border-gray-100">
+                <th className="text-left pb-2 pl-2">#</th>
+                <th className="text-left pb-2">Team</th>
+                <th className="text-center pb-2 w-7">P</th>
+                <th className="text-center pb-2 w-7">W</th>
+                <th className="text-center pb-2 w-7">D</th>
+                <th className="text-center pb-2 w-7">L</th>
+                <th className="text-center pb-2 w-8">GF</th>
+                <th className="text-center pb-2 w-8">GA</th>
+                <th className="text-center pb-2 w-8">GD</th>
+                <th className="text-center pb-2 w-8">Pts</th>
+                <th className="text-center pb-2">Form</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ladder.map((row, i) => (
+                <tr key={row.team} className={`border-b border-gray-50 ${row.team === 'Keysborough District FC' || row.team === 'KDFC' ? 'bg-club-red/5' : ''}`}>
+                  <td className="py-2.5 pl-2 font-bold text-gray-400 text-xs">{i + 1}</td>
+                  <td className="py-2.5 font-semibold text-gray-900 text-xs leading-tight pr-2">{row.team}</td>
+                  <td className="py-2.5 text-center text-gray-600 text-xs">{row.played}</td>
+                  <td className="py-2.5 text-center font-bold text-green-600 text-xs">{row.won}</td>
+                  <td className="py-2.5 text-center text-gray-500 text-xs">{row.drawn}</td>
+                  <td className="py-2.5 text-center text-red-500 text-xs">{row.lost}</td>
+                  <td className="py-2.5 text-center text-gray-600 text-xs">{row.gf}</td>
+                  <td className="py-2.5 text-center text-gray-600 text-xs">{row.ga}</td>
+                  <td className={`py-2.5 text-center font-semibold text-xs ${row.gd > 0 ? 'text-green-600' : row.gd < 0 ? 'text-red-500' : 'text-gray-500'}`}>{row.gd > 0 ? '+' : ''}{row.gd}</td>
+                  <td className="py-2.5 text-center font-black text-gray-900 text-xs">{row.pts}</td>
+                  <td className="py-2.5">
+                    <div className="flex gap-0.5 justify-center">
+                      {row.form.map((r, fi) => (
+                        <span key={fi} className={`w-4 h-4 rounded-sm text-white text-[9px] font-black flex items-center justify-center ${formColor(r)} ${fi === row.form.length - 1 ? 'ring-1 ring-offset-[1px] ring-gray-500' : ''}`}>{r}</span>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
@@ -362,6 +448,7 @@ export default function FanRoundsPage() {
               { id: 'upcoming'  as RoundTab, label: `Fixtures${upcomingRounds.length   ? ` (${upcomingRounds.length})`   : ''}`, icon: Calendar      },
               { id: 'completed' as RoundTab, label: `Results${completedRounds.length ? ` (${completedRounds.length})` : ''}`, icon: CheckCircle },
               { id: 'stats'     as RoundTab, label: 'Stats',                                                                     icon: BarChart2     },
+              { id: 'ladder'    as RoundTab, label: 'Ladder',                                                                    icon: Target        },
             ] as const).map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
@@ -390,6 +477,9 @@ export default function FanRoundsPage() {
           )}
           {tab === 'stats' && (
             <StatsPanel rounds={rounds} players={players} loading={statsLoading} />
+          )}
+          {tab === 'ladder' && (
+            <FanLadderPanel />
           )}
         </div>
       </main>

@@ -127,7 +127,7 @@ export default function FansPage() {
       await verifyFanPin({ fanId: selectedFan.id, pin })
 
       clearLockout(selectedFan.id)
-      const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name }
+      const auth: FanAuthState = { fanId: selectedFan.id, fanName: selectedFan.name, isAdmin: !!(selectedFan as any).isAdmin }
       goAfterAuth(selectedFan.id, auth)
     } catch (err: unknown) {
       const code = (err as { code?: string }).code

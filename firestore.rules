@@ -101,6 +101,16 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ── League Matches + config (ladder data) ────────────────────────────────
+    match /leagueMatches/{matchId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /ladderConfig/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     // ── Fans ─────────────────────────────────────────────────────────────────
     match /fans/{fanId} {
       allow read: if true;

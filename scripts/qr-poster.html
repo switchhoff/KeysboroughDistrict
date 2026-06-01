@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>KDFC Fan App QR Codes</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  @page {
+    size: A4 portrait;
+    margin: 0;
+  }
+
+  body {
+    width: 210mm;
+    height: 297mm;
+    background: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 77mm);
+    grid-template-rows: repeat(3, 77mm);
+    gap: 14mm 14mm;
+    padding: 0;
+  }
+
+  .cell {
+    width: 77mm;
+    height: 77mm;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3mm;
+    border: 0.4mm solid #ddd;
+    border-radius: 3mm;
+    padding: 4mm;
+  }
+
+  .cell canvas {
+    width: 58mm !important;
+    height: 58mm !important;
+  }
+
+  .label {
+    font-family: Arial, sans-serif;
+    font-size: 6pt;
+    color: #888;
+    text-align: center;
+    letter-spacing: 0.02em;
+  }
+
+  .club {
+    font-family: Arial Black, Arial, sans-serif;
+    font-weight: 900;
+    font-size: 7pt;
+    color: #c01e1e;
+    text-align: center;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+<div class="grid" id="grid"></div>
+<script>
+  const url = 'https://keysborough-district-fans.web.app';
+  const grid = document.getElementById('grid');
+
+  for (let i = 0; i < 6; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+
+    const canvas = document.createElement('canvas');
+    cell.innerHTML = '<div class="club">KDFC Fan Zone</div>';
+    cell.appendChild(canvas);
+
+    const lbl = document.createElement('div');
+    lbl.className = 'label';
+    lbl.textContent = 'keysborough-district-fans.web.app';
+    cell.appendChild(lbl);
+
+    grid.appendChild(cell);
+
+    QRCode.toCanvas(canvas, url, {
+      width: 220,
+      margin: 1,
+      color: { dark: '#c01e1e', light: '#ffffff' }
+    });
+  }
+</script>
+</body>
+</html>

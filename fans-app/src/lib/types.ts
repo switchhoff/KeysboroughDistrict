@@ -98,6 +98,7 @@ export interface Fan {
 export interface FanAuthState {
   fanId: string
   fanName: string
+  isAdmin?: boolean
 }
 
 export interface FanVote {
@@ -141,4 +142,30 @@ export interface FanMessage {
   roundId: string
   message: string
   timestamp: number
+}
+
+// ── League Ladder ─────────────────────────────────────────────────────────────
+
+export interface LeagueMatch {
+  id: string
+  round: number
+  date: string
+  homeTeam: string
+  awayTeam: string
+  homeScore: number
+  awayScore: number
+  competition: 'seniors' | 'reserves'
+}
+
+export interface LadderEntry {
+  team: string
+  played: number
+  won: number
+  drawn: number
+  lost: number
+  gf: number
+  ga: number
+  gd: number
+  pts: number
+  form: ('W' | 'D' | 'L')[]
 }

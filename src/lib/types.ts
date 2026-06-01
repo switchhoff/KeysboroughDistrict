@@ -131,3 +131,29 @@ export interface SupportMessage {
   senderName: string
   timestamp: number
 }
+
+// ── League Ladder ─────────────────────────────────────────────────────────────
+
+export interface LeagueMatch {
+  id: string
+  round: number
+  date: string        // ISO YYYY-MM-DD
+  homeTeam: string
+  awayTeam: string
+  homeScore: number
+  awayScore: number
+  competition: 'seniors' | 'reserves'
+}
+
+export interface LadderEntry {
+  team: string
+  played: number
+  won: number
+  drawn: number
+  lost: number
+  gf: number
+  ga: number
+  gd: number
+  pts: number
+  form: ('W' | 'D' | 'L')[]  // last 5
+}
